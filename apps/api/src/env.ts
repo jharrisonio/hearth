@@ -5,6 +5,8 @@ export type Env = {
   googleClientId: string;
   googleClientSecret: string;
   publicUrl: string;
+  /** Origin of the MCP resource and the OAuth authorization server. No trailing slash. */
+  oauthIssuer: string;
   port: number;
   seed: boolean;
 };
@@ -25,6 +27,7 @@ export function readEnv(): Env {
     googleClientId: process.env.GOOGLE_CLIENT_ID ?? "",
     googleClientSecret: process.env.GOOGLE_CLIENT_SECRET ?? "",
     publicUrl: resolvePublicUrl(),
+    oauthIssuer: resolveOauthIssuer(port),
     port,
     seed: process.env.SEED === "1",
   };
@@ -37,6 +40,21 @@ export function assertRuntime(env: Env) {
   if (process.env.RAILWAY_ENVIRONMENT && env.seed) {
     console.warn("SEED=1 on Railway creates the demo James and Naomi accounts. Set SEED=0 for a real household.");
   }
+  if (process.env.RAILWAY_ENVIRONMENT && !env.oauthIssuer.startsWith("https://")) {
+    console.warn("OAUTH_ISSUER is not https. A remote MCP client will refuse the connector.");
+  }
+}
+
+function resolveOauthIssuer(port: number) {
+  const explicit = process.env.OAUTH_ISSUER?.trim().replace(/\/$/, "");
+  if (explicit) return explicit;
+  const domain = process.env.RAILWAY_PUBLIC_DOMAIN?.trim().replace(/^https?:\/\//, "").replace(/\/$/, "");
+  if (domain) return `https://${domain}`;
+  return `http://127.0.0.1:${port}`;
+}
+
+export function mcpResourceUrl(issuer: string) {
+  return `${issuer.replace(/\/$/, "")}/mcp`;
 }
 
 function resolvePublicUrl() {

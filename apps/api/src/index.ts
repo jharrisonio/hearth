@@ -7,7 +7,9 @@ import { seedIfEnabled } from "./seed.js";
 
 const env = readEnv();
 assertRuntime(env);
-console.log(`hearth api public url ${env.publicUrl} (dev auth ${env.devAuth ? "on" : "off"})`);
+console.log(
+  `hearth api public url ${env.publicUrl} oauth issuer ${env.oauthIssuer} (dev auth ${env.devAuth ? "on" : "off"})`,
+);
 await runMigrations();
 if (env.seed) await seedIfEnabled();
 

@@ -3,20 +3,23 @@ import {
   createTeamSchema,
   createTokenSchema,
   registerBotSchema,
+  renameBotSchema,
   type BotSummary,
   type BotTokenSummary,
+  type ConnectorSummary,
   type Member,
   type TeamSummary,
 } from "@hearth/shared";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { Hono } from "hono";
 import { ensurePersonalTeam, findUserByEmail } from "../accounts.js";
-import { requireActor, requireOwner, requireTeam, type AppEnv } from "../actor.js";
+import { requireActor, requireOwner, requireTeam, type Actor, type AppEnv } from "../actor.js";
+import { upsertBot } from "../bots.js";
 import { db } from "../db.js";
 import { ensureTaskEvents, openTaskEventStream } from "../events.js";
 import { HttpError, parseBody } from "../errors.js";
 import { iso, readJson, requireUuid } from "../http.js";
-import { botTokens, bots, memberships, teams, users } from "../schema.js";
+import { botTokens, bots, memberships, oauthClients, oauthGrantTeams, oauthGrants, oauthTokens, teams, users } from "../schema.js";
 import { mintToken } from "../tokens.js";
 import { registerCatalogRoutes } from "./catalog.js";
 
@@ -27,9 +30,10 @@ registerCatalogRoutes(teamRoutes);
 teamRoutes.get("/", async (c) => {
   const actor = c.get("actor");
   if (actor.type === "bot") {
-    const access = await requireTeam(actor, actor.teamId);
+    if (actor.teamIds.length === 0) return c.json({ teams: [] });
+    const rows = await db.select().from(teams).where(inArray(teams.id, actor.teamIds)).orderBy(teams.kind, teams.name);
     return c.json({
-      teams: [toSummary(access.team, "member")],
+      teams: rows.map((team) => toSummary(team, "member")),
     });
   }
   const rows = await db
@@ -123,25 +127,30 @@ teamRoutes.get("/:teamId/bots", async (c) => {
 teamRoutes.post("/:teamId/bots", async (c) => {
   const teamId = c.req.param("teamId");
   requireUuid(teamId, "teamId");
-  await requireTeam(c.get("actor"), teamId);
+  const actor = c.get("actor");
+  requirePerson(actor);
+  await requireTeam(actor, teamId);
   const body = parseBody(registerBotSchema, await readJson(c));
-  const inserted = await db
-    .insert(bots)
-    .values({ teamId, agentId: body.agentId, name: body.name })
-    .onConflictDoNothing({ target: [bots.teamId, bots.agentId] })
+  const result = await upsertBot(teamId, body.agentId, body.name);
+  return c.json(toBot(result.bot), result.created ? 201 : 200);
+});
+
+teamRoutes.patch("/:teamId/bots/:botId", async (c) => {
+  const teamId = c.req.param("teamId");
+  const botId = c.req.param("botId");
+  requireUuid(teamId, "teamId");
+  requireUuid(botId, "botId");
+  const actor = c.get("actor");
+  requirePerson(actor);
+  await requireTeam(actor, teamId);
+  const body = parseBody(renameBotSchema, await readJson(c));
+  const [row] = await db
+    .update(bots)
+    .set({ name: body.name })
+    .where(and(eq(bots.id, botId), eq(bots.teamId, teamId)))
     .returning();
-  const created = inserted[0];
-  if (created) return c.json(toBot(created), 201);
-  const [existing] = await db
-    .select()
-    .from(bots)
-    .where(and(eq(bots.teamId, teamId), eq(bots.agentId, body.agentId)))
-    .limit(1);
-  if (!existing) throw new Error("Failed to register bot");
-  if (existing.name === body.name) return c.json(toBot(existing), 200);
-  const [renamed] = await db.update(bots).set({ name: body.name }).where(eq(bots.id, existing.id)).returning();
-  if (!renamed) throw new Error("Failed to register bot");
-  return c.json(toBot(renamed), 200);
+  if (!row) throw new HttpError(404, "not_found", "Bot not found.");
+  return c.json(toBot(row));
 });
 
 teamRoutes.delete("/:teamId/bots/:botId", async (c) => {
@@ -149,13 +158,67 @@ teamRoutes.delete("/:teamId/bots/:botId", async (c) => {
   const botId = c.req.param("botId");
   requireUuid(teamId, "teamId");
   requireUuid(botId, "botId");
-  await requireTeam(c.get("actor"), teamId);
+  const actor = c.get("actor");
+  requirePerson(actor);
+  await requireTeam(actor, teamId);
   const [row] = await db
     .delete(bots)
     .where(and(eq(bots.id, botId), eq(bots.teamId, teamId)))
     .returning();
   if (!row) throw new HttpError(404, "not_found", "Bot not found.");
   return c.json(toBot(row));
+});
+
+teamRoutes.get("/:teamId/connectors", async (c) => {
+  const teamId = c.req.param("teamId");
+  requireUuid(teamId, "teamId");
+  await requireTeam(c.get("actor"), teamId);
+  const rows = await db
+    .select({
+      id: oauthGrants.id,
+      clientId: oauthClients.clientId,
+      clientName: oauthClients.clientName,
+      createdAt: oauthGrants.createdAt,
+    })
+    .from(oauthGrantTeams)
+    .innerJoin(oauthGrants, eq(oauthGrants.id, oauthGrantTeams.grantId))
+    .innerJoin(oauthClients, eq(oauthClients.id, oauthGrants.oauthClientId))
+    .where(and(eq(oauthGrantTeams.teamId, teamId), isNull(oauthGrants.revokedAt)))
+    .orderBy(oauthGrants.createdAt);
+  return c.json({
+    connectors: rows.map(
+      (row): ConnectorSummary => ({
+        id: row.id,
+        clientId: row.clientId,
+        clientName: row.clientName,
+        createdAt: iso(row.createdAt) ?? new Date(0).toISOString(),
+      }),
+    ),
+  });
+});
+
+teamRoutes.delete("/:teamId/connectors/:grantId", async (c) => {
+  const teamId = c.req.param("teamId");
+  const grantId = c.req.param("grantId");
+  requireUuid(teamId, "teamId");
+  requireUuid(grantId, "grantId");
+  await requireOwner(c.get("actor"), teamId);
+  const [removed] = await db
+    .delete(oauthGrantTeams)
+    .where(and(eq(oauthGrantTeams.grantId, grantId), eq(oauthGrantTeams.teamId, teamId)))
+    .returning();
+  if (!removed) throw new HttpError(404, "not_found", "Connector not found on this list.");
+  const remaining = await db
+    .select({ teamId: oauthGrantTeams.teamId })
+    .from(oauthGrantTeams)
+    .where(eq(oauthGrantTeams.grantId, grantId));
+  if (remaining.length > 0) return c.json({ grantRevoked: false });
+  await db.update(oauthGrants).set({ revokedAt: new Date() }).where(eq(oauthGrants.id, grantId));
+  await db
+    .update(oauthTokens)
+    .set({ revokedAt: new Date() })
+    .where(and(eq(oauthTokens.grantId, grantId), isNull(oauthTokens.revokedAt)));
+  return c.json({ grantRevoked: true });
 });
 
 teamRoutes.get("/:teamId/tokens", async (c) => {
@@ -201,6 +264,12 @@ teamRoutes.delete("/:teamId/tokens/:tokenId", async (c) => {
   if (!row) throw new HttpError(404, "not_found", "Token not found.");
   return c.json({ token: toToken(row) });
 });
+
+function requirePerson(actor: Actor) {
+  if (actor.type !== "user") {
+    throw new HttpError(403, "forbidden", "Bot owners are managed in Settings, not by a connector token.");
+  }
+}
 
 function toSummary(
   team: { id: string; name: string; kind: "personal" | "household"; createdAt: Date | string },

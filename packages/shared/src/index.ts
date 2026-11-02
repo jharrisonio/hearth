@@ -367,6 +367,44 @@ export const registerBotSchema = z
   .strict();
 export type RegisterBotInput = z.infer<typeof registerBotSchema>;
 
+/** Rename a registered bot. The id stays so existing tasks keep their owner. */
+export const renameBotSchema = z
+  .object({
+    name: z.string().trim().min(1).max(80),
+  })
+  .strict();
+export type RenameBotInput = z.infer<typeof renameBotSchema>;
+
+/** One agent a connector may offer at consent time. The same shape as registering a bot. */
+export const oauthAgentSchema = registerBotSchema;
+export type OAuthAgent = z.infer<typeof oauthAgentSchema>;
+
+export const oauthConsentSchema = z
+  .object({
+    request: z.string().uuid(),
+    teamIds: z.array(z.string().uuid()).min(1).max(20),
+    bots: z.array(oauthAgentSchema).max(20).optional(),
+  })
+  .strict();
+export type OAuthConsentInput = z.infer<typeof oauthConsentSchema>;
+
+export const oauthDenySchema = z
+  .object({
+    request: z.string().uuid(),
+  })
+  .strict();
+
+/**
+ * A relative path we are willing to send the browser back to after sign-in.
+ * Rejects protocol-relative and absolute URLs.
+ */
+export function safeNextPath(value: string | null | undefined): string | null {
+  if (!value || value.length > 2000) return null;
+  if (!value.startsWith("/") || value.startsWith("//") || value.startsWith("/\\")) return null;
+  if (value.includes("\\") || value.includes("://") || /[\r\n\0]/.test(value)) return null;
+  return value;
+}
+
 export const devLoginSchema = z
   .object({
     email: z.string().trim().email().max(200),
@@ -410,6 +448,28 @@ export interface AuthConfig {
   devAuth: boolean;
   google: boolean;
   devUsers?: { email: string; name: string }[];
+  /** Canonical MCP URL. Connectors discover OAuth from this origin. */
+  mcpUrl: string;
+}
+
+/** What the consent page shows before the person approves. */
+export interface OAuthRequestPreview {
+  requestId: string;
+  clientName: string;
+  redirectUri: string;
+  redirectHost: string;
+  loopback: boolean;
+  scope: string;
+  agents: OAuthAgent[];
+  expiresAt: string;
+}
+
+/** An MCP client authorised for the current list. */
+export interface ConnectorSummary {
+  id: string;
+  clientId: string;
+  clientName: string;
+  createdAt: string;
 }
 
 export interface CurrentUser {
@@ -509,7 +569,10 @@ export const deleteTaskToolSchema = z
   .strict();
 export type DeleteTaskToolInput = z.infer<typeof deleteTaskToolSchema>;
 
-/** teamId is optional for a bot token, which belongs to one team. */
+/**
+ * Kept for the REST body shape. These tools are not registered on the MCP server.
+ * Bot owners are named at consent and in Settings.
+ */
 export const registerBotToolSchema = registerBotSchema.extend({
   teamId: z.string().uuid().optional(),
 });

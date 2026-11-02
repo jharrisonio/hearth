@@ -1,10 +1,13 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
+import { actorFromBearer } from "./actor.js";
 import { pool } from "./db.js";
 import { HttpError } from "./errors.js";
 import { handleMcp } from "./mcp.js";
+import { bearerChallenge } from "./oauth.js";
 import { authRoutes } from "./routes/auth.js";
+import { oauthRoutes } from "./routes/oauth.js";
 import { taskRoutes } from "./routes/tasks.js";
 import { teamRoutes } from "./routes/teams.js";
 
@@ -29,16 +32,27 @@ export function createApp() {
     return c.json({ ok: true });
   });
   app.route("/", authRoutes);
+  app.route("/", oauthRoutes);
   app.route("/teams", teamRoutes);
   app.route("/tasks", taskRoutes);
-  app.on(["GET", "DELETE", "PUT", "PATCH"], "/mcp", (c) => {
-    c.header("Allow", "POST");
-    return c.json(
-      { jsonrpc: "2.0", id: null, error: { code: -32000, message: "Method not allowed." } },
-      405,
-    );
+  app.all("/mcp", async (c) => {
+    if (c.req.method !== "POST") {
+      const authorization = c.req.header("authorization");
+      try {
+        if (!authorization) return bearerChallenge("Bearer token required.", false);
+        await actorFromBearer(authorization);
+      } catch (err) {
+        if (err instanceof HttpError && err.status === 401) return bearerChallenge(err.message, true);
+        throw err;
+      }
+      c.header("Allow", "POST");
+      return c.json(
+        { jsonrpc: "2.0", id: null, error: { code: -32000, message: "Method not allowed." } },
+        405,
+      );
+    }
+    return handleMcp(c, app);
   });
-  app.post("/mcp", (c) => handleMcp(c, app));
   app.notFound((c) => c.json({ error: { code: "not_found", message: "Not found." } }, 404));
   app.onError((err, c) => {
     if (err instanceof HttpError) {

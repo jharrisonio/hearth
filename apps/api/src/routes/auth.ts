@@ -1,14 +1,15 @@
 import {
   devLoginSchema,
+  safeNextPath,
   type AuthConfig,
   type CurrentUser,
 } from "@hearth/shared";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import { getCookie, setCookie } from "hono/cookie";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { randomBytes } from "node:crypto";
 import { ensurePersonalTeam, findUserByEmail, findUserById } from "../accounts.js";
-import { readEnv } from "../env.js";
+import { mcpResourceUrl, readEnv } from "../env.js";
 import { parseBody, HttpError } from "../errors.js";
 import { clearSession, readJson, setSession } from "../http.js";
 import { db } from "../db.js";
@@ -16,6 +17,7 @@ import { users } from "../schema.js";
 import { readSessionUserId, sessionCookieName, signValue, unsignValue } from "../actor.js";
 
 const STATE_COOKIE = "hearth_oauth_state";
+const NEXT_COOKIE = "hearth_next";
 
 export const authRoutes = new Hono();
 
@@ -24,6 +26,7 @@ authRoutes.get("/auth/config", async (c) => {
   const body: AuthConfig = {
     devAuth: env.devAuth,
     google: Boolean(env.googleClientId && env.googleClientSecret),
+    mcpUrl: mcpResourceUrl(env.oauthIssuer),
   };
   if (env.devAuth) {
     const rows = await db.select({ email: users.email, name: users.name }).from(users).orderBy(users.email);
@@ -52,13 +55,17 @@ authRoutes.get("/auth/google", (c) => {
     return c.redirect("/signin?error=google_not_configured");
   }
   const state = randomBytes(24).toString("base64url");
-  setCookie(c, STATE_COOKIE, signValue(state, env.sessionSecret), {
+  const cookieBase = {
     httpOnly: true,
-    sameSite: "Lax",
+    sameSite: "Lax" as const,
     secure: env.publicUrl.startsWith("https://"),
     path: "/",
     maxAge: 600,
-  });
+  };
+  setCookie(c, STATE_COOKIE, signValue(state, env.sessionSecret), cookieBase);
+  const next = safeNextPath(c.req.query("next"));
+  if (next) setCookie(c, NEXT_COOKIE, signValue(next, env.sessionSecret), cookieBase);
+  else deleteCookie(c, NEXT_COOKIE, { path: "/", secure: cookieBase.secure });
   const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   url.searchParams.set("client_id", env.googleClientId);
   url.searchParams.set("redirect_uri", redirectUri(env.publicUrl));
@@ -72,16 +79,16 @@ authRoutes.get("/auth/google", (c) => {
 authRoutes.get("/auth/google/callback", async (c) => {
   const env = readEnv();
   const error = c.req.query("error");
-  if (error) return c.redirect("/signin?error=google");
+  if (error) return signInError(c, "google");
   const code = c.req.query("code");
   const state = c.req.query("state");
   const signed = getCookie(c, STATE_COOKIE);
   const expected = signed ? unsignValue(signed, env.sessionSecret) : null;
   if (!code || !state || !expected || state !== expected) {
-    return c.redirect("/signin?error=state");
+    return signInError(c, "state");
   }
   if (!env.googleClientId || !env.googleClientSecret) {
-    return c.redirect("/signin?error=google_not_configured");
+    return signInError(c, "google_not_configured");
   }
   const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
@@ -96,14 +103,14 @@ authRoutes.get("/auth/google/callback", async (c) => {
   });
   if (!tokenRes.ok) {
     console.error("google token exchange failed", tokenRes.status);
-    return c.redirect("/signin?error=google");
+    return signInError(c, "google");
   }
   const tokenJson = (await tokenRes.json()) as { access_token?: string };
-  if (!tokenJson.access_token) return c.redirect("/signin?error=google");
+  if (!tokenJson.access_token) return signInError(c, "google");
   const profileRes = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
     headers: { authorization: `Bearer ${tokenJson.access_token}` },
   });
-  if (!profileRes.ok) return c.redirect("/signin?error=google");
+  if (!profileRes.ok) return signInError(c, "google");
   const profile = (await profileRes.json()) as {
     sub?: string;
     email?: string;
@@ -111,7 +118,7 @@ authRoutes.get("/auth/google/callback", async (c) => {
     name?: string;
   };
   if (!profile.sub || !profile.email || profile.email_verified === false) {
-    return c.redirect("/signin?error=google");
+    return signInError(c, "google");
   }
   const user = await upsertGoogleUser({
     sub: profile.sub,
@@ -120,7 +127,7 @@ authRoutes.get("/auth/google/callback", async (c) => {
   });
   await ensurePersonalTeam(user);
   setSession(c, user.id);
-  return c.redirect("/");
+  return c.redirect(takeNext(c) ?? "/");
 });
 
 authRoutes.get("/auth/me", async (c) => {
@@ -136,6 +143,20 @@ authRoutes.post("/auth/logout", (c) => {
   clearSession(c);
   return c.json({ ok: true });
 });
+
+function signInError(c: Parameters<typeof getCookie>[0], code: string) {
+  const next = takeNext(c);
+  const params = new URLSearchParams({ error: code });
+  if (next && next !== "/") params.set("next", next);
+  return c.redirect(`/signin?${params.toString()}`);
+}
+
+function takeNext(c: Parameters<typeof getCookie>[0]) {
+  const env = readEnv();
+  const signed = getCookie(c, NEXT_COOKIE);
+  deleteCookie(c, NEXT_COOKIE, { path: "/", secure: env.publicUrl.startsWith("https://") });
+  return safeNextPath(signed ? unsignValue(signed, env.sessionSecret) : null);
+}
 
 function redirectUri(publicUrl: string) {
   return `${publicUrl}/api/auth/google/callback`;

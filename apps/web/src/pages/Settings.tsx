@@ -1,4 +1,4 @@
-import type { AreaSummary, AuthConfig, BotSummary, BotTokenSummary, Member, TeamSummary } from "@hearth/shared";
+import type { AreaSummary, AuthConfig, BotSummary, BotTokenSummary, ConnectorSummary, Member, TeamSummary } from "@hearth/shared";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { useAuth } from "@/auth";
@@ -18,6 +18,7 @@ export function Settings() {
   const [members, setMembers] = useState<Member[]>([]);
   const [tokens, setTokens] = useState<BotTokenSummary[]>([]);
   const [bots, setBots] = useState<BotSummary[]>([]);
+  const [connectors, setConnectors] = useState<ConnectorSummary[]>([]);
   const [areas, setAreas] = useState<AreaSummary[]>([]);
   const [email, setEmail] = useState("");
   const [agentId, setAgentId] = useState("");
@@ -30,22 +31,27 @@ export function Settings() {
   const [loading, setLoading] = useState(true);
   const [confirmRevoke, setConfirmRevoke] = useState<string | null>(null);
   const [confirmUnregister, setConfirmUnregister] = useState<string | null>(null);
+  const [confirmDisconnect, setConfirmDisconnect] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
   const [config, setConfig] = useState<AuthConfig | null>(null);
 
   async function load(id: string) {
     setError(null);
     try {
-      const [detail, tokenList, botList, areaList] = await Promise.all([
+      const [detail, tokenList, botList, areaList, connectorList] = await Promise.all([
         api.team(id),
         api.tokens(id),
         api.bots(id),
         api.areas(id, true),
+        api.connectors(id),
       ]);
       setTeam(detail.team);
       setMembers(detail.members);
       setTokens(tokenList.tokens);
       setBots(botList.bots);
       setAreas(areaList.areas);
+      setConnectors(connectorList.connectors);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not load this team.");
     } finally {
@@ -125,10 +131,41 @@ export function Settings() {
     try {
       await api.unregisterBot(teamId!, botId);
       setConfirmUnregister(null);
-      setNotice("Bot unregistered. Tasks already assigned to them keep that owner.");
+      setNotice("Bot retired. Tasks already assigned keep that owner until you reassign them.");
       await load(teamId!);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not unregister that bot.");
+    }
+  }
+
+  async function saveRename(botId: string) {
+    const name = renameValue.trim();
+    if (!name) return;
+    setNotice(null);
+    setError(null);
+    try {
+      await api.renameBot(teamId!, botId, name);
+      setRenaming(null);
+      setNotice("Name saved. You do not need to reconnect.");
+      await load(teamId!);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not rename that bot.");
+    }
+  }
+
+  async function disconnect(grantId: string) {
+    setError(null);
+    try {
+      const result = await api.disconnectConnector(teamId!, grantId);
+      setConfirmDisconnect(null);
+      setNotice(
+        result.grantRevoked
+          ? "Disconnected. This was the last list, so the connector's token no longer works."
+          : "Disconnected from this list. Other lists on that connection stay. Tasks keep their history.",
+      );
+      await load(teamId!);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not disconnect that connector.");
     }
   }
 
@@ -316,9 +353,54 @@ export function Settings() {
               setNotice={setNotice}
             />
 
+            <h3 className={subheadClass}>Connectors</h3>
+            <p className="mb-2 text-[13px] font-light text-[#a8a8a8]">
+              An app such as Grok Bot that you authorised to manage tasks on this list. Add, rename, or retire bot owners
+              here. You do not need to reconnect.
+            </p>
+            {config?.mcpUrl ? (
+              <p className="mb-2 break-all text-[12px] font-light text-[#a8a8a8]">
+                Connector URL <span className="text-[#cfcfcf]">{config.mcpUrl}</span>. Leave the token blank. Hearth asks
+                which lists to allow.
+              </p>
+            ) : null}
+            <ul>
+              {connectors.length === 0 ? (
+                <li className="py-3.5 text-[13px] text-[#a8a8a8]">No connectors on this list.</li>
+              ) : null}
+              {connectors.map((connector) => (
+                <li
+                  key={connector.id}
+                  className="flex flex-wrap items-baseline justify-between gap-3 border-b border-[#1c1c1c] py-3.5 text-[14px] font-light"
+                >
+                  <span>
+                    {connector.clientName}{" "}
+                    <span className="text-[12px] text-[#a8a8a8]">{connector.createdAt.slice(0, 10)}</span>
+                  </span>
+                  {isOwner ? (
+                    confirmDisconnect === connector.id ? (
+                      <span className="flex gap-4">
+                        <Button size="sm" variant="danger" onClick={() => void disconnect(connector.id)}>
+                          Disconnect
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setConfirmDisconnect(null)}>
+                          Cancel
+                        </Button>
+                      </span>
+                    ) : (
+                      <Button size="sm" variant="ghost" onClick={() => setConfirmDisconnect(connector.id)}>
+                        Disconnect
+                      </Button>
+                    )
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+
             <h3 className={subheadClass}>Bots</h3>
             <p className="mb-2 text-[13px] font-light text-[#a8a8a8]">
-              A registered bot is a name you can put on a task. It does not get a secret. One team token can post for all of them.
+              A registered bot is a name you can put on a task. It does not get a secret. Retiring one unlinks it as an
+              owner. Tasks keep that history until you reassign them.
             </p>
             <ul>
               {bots.length === 0 ? <li className="py-3.5 text-[13px] text-[#a8a8a8]">No bots registered yet.</li> : null}
@@ -327,22 +409,56 @@ export function Settings() {
                   key={bot.id}
                   className="flex flex-wrap items-baseline justify-between gap-3 border-b border-[#1c1c1c] py-3.5 text-[14px] font-light"
                 >
-                  <span>
-                    {bot.name} <span className="text-[12px] text-[#a8a8a8]">{bot.agentId}</span>
-                  </span>
-                  {confirmUnregister === bot.id ? (
+                  {renaming === bot.id ? (
+                    <form
+                      className="flex min-w-0 flex-1 items-end gap-4"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void saveRename(bot.id);
+                      }}
+                    >
+                      <label className="block min-w-0 flex-1">
+                        <span className="sr-only">Name</span>
+                        <input className={fieldClass} value={renameValue} onChange={(event) => setRenameValue(event.target.value)} required />
+                      </label>
+                      <Button type="submit" size="sm">
+                        Save
+                      </Button>
+                      <Button type="button" size="sm" variant="ghost" onClick={() => setRenaming(null)}>
+                        Cancel
+                      </Button>
+                    </form>
+                  ) : (
+                    <span>
+                      {bot.name} <span className="text-[12px] text-[#a8a8a8]">{bot.agentId}</span>
+                    </span>
+                  )}
+                  {renaming === bot.id ? null : confirmUnregister === bot.id ? (
                     <span className="flex gap-4">
-                      <Button size="sm" variant="danger" onClick={() => void unregister(bot.id)}>
-                        Unregister
+                        <Button size="sm" variant="danger" onClick={() => void unregister(bot.id)}>
+                        Retire
                       </Button>
                       <Button size="sm" variant="ghost" onClick={() => setConfirmUnregister(null)}>
                         Cancel
                       </Button>
                     </span>
                   ) : (
-                    <Button size="sm" variant="ghost" onClick={() => setConfirmUnregister(bot.id)}>
-                      Unregister
-                    </Button>
+                    <span className="flex gap-4">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          setRenaming(bot.id);
+                          setRenameValue(bot.name);
+                          setConfirmUnregister(null);
+                        }}
+                      >
+                        Rename
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setConfirmUnregister(bot.id)}>
+                        Retire
+                      </Button>
+                    </span>
                   )}
                 </li>
               ))}
@@ -361,7 +477,7 @@ export function Settings() {
 
             <h3 className={subheadClass}>Bot tokens</h3>
             <p className="text-[13px] font-light text-[#a8a8a8]">
-              A token is a credential for this team, separate from a registered bot. Send it as{" "}
+              A token is a credential for this team, separate from a connector. Existing tokens keep working. Send it as{" "}
               <code>Authorization: Bearer …</code>. The secret is shown once.
             </p>
             {secret ? (

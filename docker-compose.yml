@@ -32,6 +32,7 @@ services:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       PUBLIC_URL: ${PUBLIC_URL:-http://127.0.0.1:43123}
+      OAUTH_ISSUER: ${OAUTH_ISSUER:-http://127.0.0.1:43124}
       PORT: "3001"
     ports:
       - "43124:3001"

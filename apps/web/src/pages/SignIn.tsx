@@ -1,4 +1,4 @@
-import type { AuthConfig } from "@hearth/shared";
+import { safeNextPath, type AuthConfig } from "@hearth/shared";
 import { useEffect, useState } from "react";
 import { Navigate, useSearchParams } from "react-router";
 import { useAuth } from "@/auth";
@@ -13,6 +13,7 @@ const errors: Record<string, string> = {
 export function SignIn() {
   const { user, loading, setUser } = useAuth();
   const [params] = useSearchParams();
+  const next = safeNextPath(params.get("next"));
   const [config, setConfig] = useState<AuthConfig | null>(null);
   const [error, setError] = useState<string | null>(errors[params.get("error") ?? ""] ?? null);
   const [pending, setPending] = useState<string | null>(null);
@@ -24,7 +25,7 @@ export function SignIn() {
       .catch(() => setError("Hearth can't reach the server."));
   }, []);
 
-  if (!loading && user) return <Navigate to="/" replace />;
+  if (!loading && user) return <Navigate to={next ?? "/"} replace />;
 
   async function signIn(email: string) {
     setPending(email);
@@ -46,7 +47,10 @@ export function SignIn() {
           <button
             type="button"
             className="text-[15px] font-light tracking-wide hover:underline"
-            onClick={() => (window.location.href = "/api/auth/google")}
+            onClick={() => {
+              const target = next ? `/api/auth/google?next=${encodeURIComponent(next)}` : "/api/auth/google";
+              window.location.href = target;
+            }}
           >
             Continue with Google
           </button>

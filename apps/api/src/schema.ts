@@ -1,5 +1,5 @@
-import type { TaskSource } from "@hearth/shared";
-import { boolean, index, integer, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
+import type { OAuthAgent, TaskSource } from "@hearth/shared";
+import { boolean, index, integer, jsonb, pgEnum, pgTable, primaryKey, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 
 export const teamKind = pgEnum("team_kind", ["personal", "household"]);
 export const membershipRole = pgEnum("membership_role", ["owner", "member"]);
@@ -94,6 +94,100 @@ export const areas = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index("areas_team_idx").on(table.teamId)],
+);
+
+/** Dynamic or metadata MCP client. `client_id` is the public id, not a secret. */
+export const oauthClients = pgTable("oauth_clients", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  clientId: text("client_id").notNull().unique(),
+  clientName: text("client_name").notNull(),
+  redirectUris: text("redirect_uris").array().notNull(),
+  tokenEndpointAuthMethod: text("token_endpoint_auth_method").notNull().default("none"),
+  source: text("source").notNull().default("dcr"),
+  metadataFetchedAt: timestamp("metadata_fetched_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Browser handoff for one install. Consumed when the person authorises or denies. */
+export const oauthRequests = pgTable("oauth_requests", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  clientId: text("client_id").notNull(),
+  redirectUri: text("redirect_uri").notNull(),
+  codeChallenge: text("code_challenge").notNull(),
+  state: text("state"),
+  resource: text("resource").notNull(),
+  scope: text("scope").notNull(),
+  agents: jsonb("agents").$type<OAuthAgent[]>().notNull().default([]),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  consumedAt: timestamp("consumed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** One consent. The row id is the bot owner id for tasks this connector creates. */
+export const oauthGrants = pgTable(
+  "oauth_grants",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    oauthClientId: uuid("oauth_client_id")
+      .notNull()
+      .references(() => oauthClients.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    resource: text("resource").notNull(),
+    scope: text("scope").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (table) => [index("oauth_grants_user_idx").on(table.userId)],
+);
+
+export const oauthGrantTeams = pgTable(
+  "oauth_grant_teams",
+  {
+    grantId: uuid("grant_id")
+      .notNull()
+      .references(() => oauthGrants.id, { onDelete: "cascade" }),
+    teamId: uuid("team_id")
+      .notNull()
+      .references(() => teams.id, { onDelete: "cascade" }),
+  },
+  (table) => [primaryKey({ columns: [table.grantId, table.teamId] }), index("oauth_grant_teams_team_idx").on(table.teamId)],
+);
+
+export const oauthCodes = pgTable("oauth_codes", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  codeHash: text("code_hash").notNull().unique(),
+  grantId: uuid("grant_id")
+    .notNull()
+    .references(() => oauthGrants.id, { onDelete: "cascade" }),
+  clientId: text("client_id").notNull(),
+  redirectUri: text("redirect_uri").notNull(),
+  codeChallenge: text("code_challenge").notNull(),
+  resource: text("resource").notNull(),
+  scope: text("scope").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  usedAt: timestamp("used_at", { withTimezone: true }),
+});
+
+export const oauthTokens = pgTable(
+  "oauth_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    grantId: uuid("grant_id")
+      .notNull()
+      .references(() => oauthGrants.id, { onDelete: "cascade" }),
+    accessHash: text("access_hash").notNull().unique(),
+    accessPrefix: text("access_prefix").notNull(),
+    refreshHash: text("refresh_hash").unique(),
+    resource: text("resource").notNull(),
+    scope: text("scope").notNull(),
+    accessExpiresAt: timestamp("access_expires_at", { withTimezone: true }).notNull(),
+    refreshExpiresAt: timestamp("refresh_expires_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("oauth_tokens_grant_idx").on(table.grantId)],
 );
 
 /** A bot you can assign a task to. Not a credential — tokens stay in bot_tokens. */

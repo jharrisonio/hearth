@@ -6,12 +6,18 @@ import { and, eq, isNull } from "drizzle-orm";
 import { db } from "./db.js";
 import { readEnv } from "./env.js";
 import { HttpError } from "./errors.js";
-import { botTokens, bots, memberships, teams } from "./schema.js";
+import { botTokens, bots, memberships, oauthGrantTeams, oauthGrants, oauthTokens, teams } from "./schema.js";
 import { hashToken } from "./tokens.js";
 
 export type Actor =
   | { type: "user"; id: string }
-  | { type: "bot"; id: string; teamId: string };
+  | {
+      type: "bot";
+      /** Bot token id, or the OAuth grant id. Both can own a task. */
+      id: string;
+      teamIds: string[];
+      credential: { kind: "token"; id: string } | { kind: "oauth"; id: string };
+    };
 
 export type AppEnv = { Variables: { actor: Actor } };
 
@@ -66,9 +72,14 @@ export async function actorFromBearer(header: string | undefined): Promise<Actor
   const match = header ? /^Bearer\s+(\S+)$/i.exec(header) : null;
   const secret = match?.[1];
   if (!secret) throw new HttpError(401, "unauthorized", "Bearer token required.");
+  if (secret.startsWith("hoa_")) {
+    const oauth = await oauthFromSecret(secret);
+    if (!oauth) throw new HttpError(401, "unauthorized", "Invalid or revoked token.");
+    return oauth;
+  }
   const bot = await botFromSecret(secret);
   if (!bot) throw new HttpError(401, "unauthorized", "Invalid or revoked token.");
-  return { type: "bot", id: bot.id, teamId: bot.teamId };
+  return { type: "bot", id: bot.id, teamIds: [bot.teamId], credential: { kind: "token", id: bot.id } };
 }
 
 export async function requireActor(c: Context<AppEnv>, next: () => Promise<void>) {
@@ -98,7 +109,7 @@ export async function requireTeam(actor: Actor, teamId: string) {
   const [team] = await db.select().from(teams).where(eq(teams.id, teamId)).limit(1);
   if (!team) throw new HttpError(404, "not_found", "Team not found.");
   if (actor.type === "bot") {
-    if (actor.teamId !== teamId) {
+    if (!actor.teamIds.includes(teamId)) {
       throw new HttpError(403, "forbidden", "This token is not valid for that team.");
     }
     return { team, role: null as null };
@@ -125,10 +136,10 @@ export async function requireOwner(actor: Actor, teamId: string) {
 
 export async function teamIdsFor(actor: Actor, requested: string | undefined): Promise<string[]> {
   if (actor.type === "bot") {
-    if (requested && requested !== actor.teamId) {
+    if (requested && !actor.teamIds.includes(requested)) {
       throw new HttpError(403, "forbidden", "This token is not valid for that team.");
     }
-    return [actor.teamId];
+    return requested ? [requested] : [...actor.teamIds];
   }
   if (requested) {
     await requireTeam(actor, requested);
@@ -166,6 +177,13 @@ export async function assertOwnerOnTeam(teamId: string, owner: ActorRef) {
     .where(and(eq(botTokens.id, owner.id), eq(botTokens.teamId, teamId)))
     .limit(1);
   if (token) return;
+  const [grant] = await db
+    .select({ id: oauthGrants.id })
+    .from(oauthGrants)
+    .innerJoin(oauthGrantTeams, eq(oauthGrantTeams.grantId, oauthGrants.id))
+    .where(and(eq(oauthGrants.id, owner.id), eq(oauthGrantTeams.teamId, teamId), isNull(oauthGrants.revokedAt)))
+    .limit(1);
+  if (grant) return;
   throw new HttpError(400, "invalid_owner", "That bot is not registered on this team.");
 }
 
@@ -173,16 +191,69 @@ export function actorRef(actor: Actor): ActorRef {
   return { type: actor.type, id: actor.id };
 }
 
-/** A long-lived stream re-checks this. requireTeam does not see a revoked bot token. */
+/** A long-lived stream re-checks this. requireTeam does not see a revocation that happens later. */
 export async function assertActorCurrent(actor: Actor, teamId: string) {
-  await requireTeam(actor, teamId);
-  if (actor.type !== "bot") return;
-  const [row] = await db
-    .select({ revokedAt: botTokens.revokedAt })
-    .from(botTokens)
-    .where(eq(botTokens.id, actor.id))
+  if (actor.type === "user") {
+    await requireTeam(actor, teamId);
+    return;
+  }
+  if (actor.credential.kind === "token") {
+    const [row] = await db
+      .select({ revokedAt: botTokens.revokedAt, teamId: botTokens.teamId })
+      .from(botTokens)
+      .where(eq(botTokens.id, actor.credential.id))
+      .limit(1);
+    if (!row || row.revokedAt || row.teamId !== teamId) {
+      throw new HttpError(401, "unauthorized", "Invalid or revoked token.");
+    }
+    return;
+  }
+  const [token] = await db
+    .select({
+      revokedAt: oauthTokens.revokedAt,
+      accessExpiresAt: oauthTokens.accessExpiresAt,
+      grantId: oauthTokens.grantId,
+    })
+    .from(oauthTokens)
+    .where(eq(oauthTokens.id, actor.credential.id))
     .limit(1);
-  if (!row || row.revokedAt) {
+  if (!token || token.revokedAt || token.accessExpiresAt.getTime() <= Date.now()) {
     throw new HttpError(401, "unauthorized", "Invalid or revoked token.");
   }
+  const [grant] = await db
+    .select({ revokedAt: oauthGrants.revokedAt })
+    .from(oauthGrants)
+    .where(eq(oauthGrants.id, token.grantId))
+    .limit(1);
+  if (!grant || grant.revokedAt) throw new HttpError(401, "unauthorized", "Invalid or revoked token.");
+  const [link] = await db
+    .select({ teamId: oauthGrantTeams.teamId })
+    .from(oauthGrantTeams)
+    .where(and(eq(oauthGrantTeams.grantId, token.grantId), eq(oauthGrantTeams.teamId, teamId)))
+    .limit(1);
+  if (!link) throw new HttpError(403, "forbidden", "This token is not valid for that team.");
+}
+
+async function oauthFromSecret(secret: string): Promise<Actor | null> {
+  const [token] = await db
+    .select()
+    .from(oauthTokens)
+    .where(and(eq(oauthTokens.accessHash, hashToken(secret)), isNull(oauthTokens.revokedAt)))
+    .limit(1);
+  if (!token) return null;
+  if (token.accessExpiresAt.getTime() <= Date.now()) {
+    throw new HttpError(401, "unauthorized", "Access token expired.");
+  }
+  const [grant] = await db.select().from(oauthGrants).where(eq(oauthGrants.id, token.grantId)).limit(1);
+  if (!grant || grant.revokedAt) return null;
+  const links = await db
+    .select({ teamId: oauthGrantTeams.teamId })
+    .from(oauthGrantTeams)
+    .where(eq(oauthGrantTeams.grantId, grant.id));
+  return {
+    type: "bot",
+    id: grant.id,
+    teamIds: links.map((link) => link.teamId),
+    credential: { kind: "oauth", id: token.id },
+  };
 }
