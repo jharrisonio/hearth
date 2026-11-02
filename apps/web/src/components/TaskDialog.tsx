@@ -13,6 +13,7 @@ import {
   type TaskSource,
 } from "@hearth/shared";
 import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
+import { DeleteDialog } from "@/components/DeleteDialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { actionLabel, axesFor } from "@/lib/action";
@@ -99,6 +100,9 @@ function TaskForm({
   const [owner, setOwner] = useState(task ? ownerKey(task.owner.type, task.owner.id) : ownerKey("user", defaultOwnerId));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const busy = saving || cancelling;
   const suggested = suggestAction(important, urgent);
   const ownerChoices = new Set([
     ...members.map((member) => ownerKey("user", member.userId)),
@@ -135,8 +139,23 @@ function TaskForm({
     }
   }
 
+  async function onCancelTask() {
+    if (!task || busy) return;
+    setCancelling(true);
+    setError(null);
+    try {
+      await api.cancelTask(task.id, "cancelled");
+      onSaved();
+      onClose();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not cancel the task.");
+      setCancelling(false);
+    }
+  }
+
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
+    if (busy) return;
     const parsedOwner = parseOwnerKey(owner);
     if (!title.trim()) {
       setError("A task needs a title.");
@@ -154,6 +173,7 @@ function TaskForm({
     if (source === "invalid") return;
     setSaving(true);
     setError(null);
+    setConfirmingDelete(false);
     const body = {
       title: title.trim(),
       detail: detail.trim() || null,
@@ -380,18 +400,44 @@ function TaskForm({
           </label>
         </>
       ) : null}
-      {task?.status === "done" && task.outcome ? <p className="mt-6 text-[13px] text-white/60">Outcome: {task.outcome}</p> : null}
+      {task && task.status !== "open" && task.outcome ? (
+        <p className="mt-6 text-[13px] text-white/60">
+          {task.status === "cancelled" ? "Cancelled" : "Outcome"}: {task.outcome}
+        </p>
+      ) : null}
       {error ? <p className="mt-4 text-[13px] text-[#c9a35a]">{error}</p> : null}
-      <div className="mt-16 flex items-center justify-end gap-7">
-        <Button type="submit" variant={task ? "ghost" : "solid"} disabled={saving}>
-          {saving ? "Saving…" : task ? "Save" : "Add"}
-        </Button>
-        {task && task.status === "open" ? (
-          <Button type="button" variant="solid" onClick={() => onComplete(task)}>
-            Complete
+      <div className="mt-16 flex flex-wrap items-center justify-between gap-x-7 gap-y-4">
+        <div className="flex items-center gap-7">
+          {task ? (
+            <Button type="button" variant="ghost" onClick={() => setConfirmingDelete(true)} disabled={busy}>
+              Delete
+            </Button>
+          ) : null}
+          {task && task.status === "open" ? (
+            <Button type="button" variant="ghost" onClick={() => void onCancelTask()} disabled={busy}>
+              {cancelling ? "Cancelling…" : "Cancel"}
+            </Button>
+          ) : null}
+        </div>
+        <div className="flex items-center gap-7">
+          <Button type="submit" variant={task ? "ghost" : "solid"} disabled={busy}>
+            {saving ? "Saving…" : task ? "Save" : "Add"}
           </Button>
-        ) : null}
+          {task && task.status === "open" ? (
+            <Button type="button" variant="solid" onClick={() => onComplete(task)} disabled={busy}>
+              Complete
+            </Button>
+          ) : null}
+        </div>
       </div>
+      <DeleteDialog
+        task={confirmingDelete && task ? task : null}
+        onClose={() => setConfirmingDelete(false)}
+        onDeleted={() => {
+          onSaved();
+          onClose();
+        }}
+      />
     </form>
   );
 }

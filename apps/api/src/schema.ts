@@ -3,7 +3,7 @@ import { boolean, index, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid }
 
 export const teamKind = pgEnum("team_kind", ["personal", "household"]);
 export const membershipRole = pgEnum("membership_role", ["owner", "member"]);
-export const taskStatus = pgEnum("task_status", ["open", "done"]);
+export const taskStatus = pgEnum("task_status", ["open", "done", "cancelled"]);
 export const taskAction = pgEnum("task_action", ["do_now", "delegate", "schedule", "later"]);
 export const actorType = pgEnum("actor_type", ["user", "bot"]);
 
@@ -134,6 +134,7 @@ export const tasks = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
     createdByType: actorType("created_by_type").notNull(),
     createdById: uuid("created_by_id").notNull(),
   },

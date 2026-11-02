@@ -14,7 +14,7 @@ type Task = {
   id: string;
   teamId: string;
   title: string;
-  status: "open" | "done";
+  status: "open" | "done" | "cancelled";
   action: "do_now" | "delegate" | "schedule" | "later";
   important: boolean;
   urgent: boolean;
@@ -23,6 +23,7 @@ type Task = {
   needsCalendar: boolean;
   outcome: string | null;
   completedAt: string | null;
+  cancelledAt: string | null;
   owner: ActorRef;
   dueAt: string | null;
   createdAt: string;
@@ -155,6 +156,8 @@ async function main() {
     403,
     "naomi complete personal",
   );
+  expectStatus(await call(naomi, "POST", `/tasks/${personal.id}/cancel`, {}), 403, "naomi cancel personal");
+  expectStatus(await call(naomi, "DELETE", `/tasks/${personal.id}`), 403, "naomi delete personal");
   const naomiQueue = expectStatus(await call(naomi, "GET", "/tasks/do-immediately"), 200, "naomi queue") as {
     tasks: Task[];
   };
@@ -295,6 +298,8 @@ async function main() {
 
   await checkActions(james, jamesPersonal.id, stamp);
   console.log("ok  action suggestion, constraints, and morning queue");
+  await checkDrop(james, jamesPersonal.id, stamp);
+  console.log("ok  cancel keeps an audit row and delete removes the task");
   await checkOrder(james, jamesPersonal.id, stamp);
   console.log("ok  do-immediately order");
   console.log("isolation check passed");
@@ -427,6 +432,45 @@ async function checkActions(cookie: string, teamId: string, stamp: string) {
   assert(!after.tasks.some((task) => task.id === scheduleNeeds.id), "linked future schedule left the morning queue");
 }
 
+async function checkDrop(cookie: string, teamId: string, stamp: string) {
+  const live = await createTask(cookie, {
+    teamId,
+    title: `${stamp} cancel-me`,
+    action: "do_now",
+    important: true,
+    urgent: true,
+  });
+  const cancelled = expectStatus(await call(cookie, "POST", `/tasks/${live.id}/cancel`, {}), 200, "cancel") as Task;
+  assert(cancelled.status === "cancelled" && cancelled.outcome === "cancelled" && cancelled.cancelledAt, "cancel fields");
+  assert(cancelled.completedAt == null, "cancel does not set completedAt");
+  const open = expectStatus(await call(cookie, "GET", `/tasks?teamId=${teamId}&status=open`), 200, "open after cancel") as {
+    tasks: Task[];
+  };
+  assert(!open.tasks.some((task) => task.id === live.id), "cancelled task stayed on the open list");
+  const queue = await queueIds(cookie, teamId);
+  assert(!queue.tasks.some((task) => task.id === live.id), "cancelled task stayed in the morning queue");
+  const audit = expectStatus(
+    await call(cookie, "GET", `/tasks?teamId=${teamId}&status=cancelled`),
+    200,
+    "cancelled list",
+  ) as { tasks: Task[] };
+  assert(audit.tasks.some((task) => task.id === live.id), "cancelled task is missing from the audit list");
+  expectStatus(await call(cookie, "POST", `/tasks/${live.id}/cancel`, { outcome: "again" }), 409, "cancel twice");
+  expectStatus(await call(cookie, "POST", `/tasks/${live.id}/complete`, { outcome: "nope" }), 409, "complete cancelled");
+
+  const dupe = await createTask(cookie, { teamId, title: `${stamp} delete-me`, action: "later" });
+  const removed = expectStatus(await call(cookie, "DELETE", `/tasks/${dupe.id}`), 200, "delete") as {
+    id: string;
+    deleted: boolean;
+  };
+  assert(removed.deleted === true && removed.id === dupe.id, "delete response");
+  const after = expectStatus(await call(cookie, "GET", `/tasks?teamId=${teamId}`), 200, "list after delete") as {
+    tasks: Task[];
+  };
+  assert(!after.tasks.some((task) => task.id === dupe.id), "deleted task is still listed");
+  expectStatus(await call(cookie, "DELETE", `/tasks/${dupe.id}`), 404, "delete twice");
+}
+
 async function queueIds(cookie: string, teamId: string) {
   return expectStatus(await call(cookie, "GET", `/tasks/do-immediately?teamId=${teamId}`), 200, "morning queue") as {
     tasks: Task[];
@@ -450,7 +494,7 @@ try {
       const probe = await call(task.cookie, "POST", `/tasks/${task.id}/complete`, {
         outcome: "isolation check cleanup",
       });
-      if (probe.status !== 200 && probe.status !== 409) {
+      if (probe.status !== 200 && probe.status !== 409 && probe.status !== 404) {
         console.error(`cleanup ${task.id} returned ${probe.status}`);
       }
     } catch (error) {

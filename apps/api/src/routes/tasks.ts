@@ -1,5 +1,6 @@
 import {
   actions,
+  cancelTaskSchema,
   completeTaskSchema,
   createTaskSchema,
   followUpFrom,
@@ -10,6 +11,7 @@ import {
   type Action,
   type ActorRef,
   type CreateTaskInput,
+  type DeletedTask,
   type TaskStatus,
 } from "@hearth/shared";
 import { and, desc, eq, inArray, isNotNull, lt, sql, type SQL } from "drizzle-orm";
@@ -36,6 +38,7 @@ const BLOCKED_UPDATE = new Set([
   "status",
   "outcome",
   "completedAt",
+  "cancelledAt",
   "id",
   "teamId",
   "createdAt",
@@ -155,7 +158,7 @@ taskRoutes.patch("/:id", async (c) => {
     throw new HttpError(
       400,
       "status_immutable",
-      "Status cannot be changed here. Complete the task with POST /tasks/:id/complete.",
+      "Status cannot be changed here. Complete the task with POST /tasks/:id/complete, or cancel it with POST /tasks/:id/cancel.",
     );
   }
   for (const key of Object.keys(raw)) {
@@ -225,6 +228,9 @@ taskRoutes.post("/:id/complete", async (c) => {
   if (existing.status === "done") {
     throw new HttpError(409, "already_done", "This task is already done.");
   }
+  if (existing.status === "cancelled") {
+    throw new HttpError(409, "already_cancelled", "This task is cancelled.");
+  }
   const now = new Date();
   const [row] = await db
     .update(tasks)
@@ -241,6 +247,50 @@ taskRoutes.post("/:id/complete", async (c) => {
   if (!task) throw new HttpError(404, "not_found", "Task not found.");
   await publishTaskEvent("completed", task);
   return c.json(task);
+});
+
+taskRoutes.post("/:id/cancel", async (c) => {
+  const id = c.req.param("id");
+  requireUuid(id, "id");
+  const body = parseBody(cancelTaskSchema, await readJson(c));
+  const existing = await loadTask(id);
+  await requireTeam(c.get("actor"), existing.teamId);
+  if (existing.status === "done") {
+    throw new HttpError(409, "already_done", "This task is already done.");
+  }
+  if (existing.status === "cancelled") {
+    throw new HttpError(409, "already_cancelled", "This task is already cancelled.");
+  }
+  const now = new Date();
+  const [row] = await db
+    .update(tasks)
+    .set({
+      status: "cancelled",
+      outcome: body.outcome ?? "cancelled",
+      cancelledAt: now,
+      updatedAt: now,
+    })
+    .where(eq(tasks.id, id))
+    .returning();
+  if (!row) throw new HttpError(404, "not_found", "Task not found.");
+  const task = await loadTaskView(row.id);
+  if (!task) throw new HttpError(404, "not_found", "Task not found.");
+  await publishTaskEvent("cancelled", task);
+  return c.json(task);
+});
+
+taskRoutes.delete("/:id", async (c) => {
+  const id = c.req.param("id");
+  requireUuid(id, "id");
+  const existing = await loadTask(id);
+  await requireTeam(c.get("actor"), existing.teamId);
+  const snapshot = await loadTaskView(id);
+  if (!snapshot) throw new HttpError(404, "not_found", "Task not found.");
+  const [row] = await db.delete(tasks).where(eq(tasks.id, id)).returning();
+  if (!row) throw new HttpError(404, "not_found", "Task not found.");
+  await publishTaskEvent("deleted", snapshot, new Date().toISOString());
+  const body: DeletedTask = { id: snapshot.id, deleted: true };
+  return c.json(body);
 });
 
 async function loadTask(id: string) {
@@ -348,7 +398,7 @@ function parseAction(value: string | undefined): Action | undefined {
 function parseStatus(value: string | undefined): TaskStatus | undefined {
   if (value === undefined) return undefined;
   if ((taskStatuses as readonly string[]).includes(value)) return value as TaskStatus;
-  throw new HttpError(400, "invalid_query", "status must be open or done.");
+  throw new HttpError(400, "invalid_query", "status must be open, done, or cancelled.");
 }
 
 function parseOwner(value: string): ActorRef {

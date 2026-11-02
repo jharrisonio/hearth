@@ -5,6 +5,7 @@ import type {
   BotSummary,
   BotTokenSummary,
   CurrentUser,
+  DeletedTask,
   Member,
   ProjectSummary,
   Task,
@@ -106,4 +107,10 @@ export const api = {
     request<Task>(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   completeTask: (id: string, outcome: string) =>
     request<Task>(`/tasks/${id}/complete`, { method: "POST", body: JSON.stringify({ outcome }) }),
+  cancelTask: (id: string, outcome?: string) =>
+    request<Task>(`/tasks/${id}/cancel`, {
+      method: "POST",
+      body: JSON.stringify(outcome === undefined ? {} : { outcome }),
+    }),
+  deleteTask: (id: string) => request<DeletedTask>(`/tasks/${id}`, { method: "DELETE" }),
 };

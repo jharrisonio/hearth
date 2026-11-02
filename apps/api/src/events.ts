@@ -68,12 +68,12 @@ export async function closeTaskEvents() {
   await current.end().catch(() => undefined);
 }
 
-export async function publishTaskEvent(type: TaskEventType, task: Task) {
+export async function publishTaskEvent(type: TaskEventType, task: Task, at = task.updatedAt) {
   deliverLocal({
     type,
     teamId: task.teamId,
     taskId: task.id,
-    at: task.updatedAt,
+    at,
     task,
   });
   const payload = JSON.stringify({
@@ -81,7 +81,7 @@ export async function publishTaskEvent(type: TaskEventType, task: Task) {
     type,
     teamId: task.teamId,
     taskId: task.id,
-    at: task.updatedAt,
+    at,
   });
   try {
     await pool.query("select pg_notify($1, $2)", [CHANNEL, payload]);
@@ -100,6 +100,17 @@ export async function handleRemoteNotification(payload: string) {
   }
   if (note.origin === taskEventOrigin) return;
   if (!subscribers.get(note.teamId)?.size) return;
+  if (note.type === "deleted") {
+    const task = await loadTaskView(note.taskId);
+    deliverLocal({
+      type: "deleted",
+      teamId: note.teamId,
+      taskId: note.taskId,
+      at: note.at,
+      task: task && task.teamId === note.teamId ? task : null,
+    });
+    return;
+  }
   const task = await loadTaskView(note.taskId);
   if (!task || task.teamId !== note.teamId) return;
   deliverLocal({

@@ -2,7 +2,7 @@ import { z } from "zod";
 
 /** Stored next step. Important and urgent stay separate and still drive sort order. */
 export const actions = ["do_now", "delegate", "schedule", "later"] as const;
-export const taskStatuses = ["open", "done"] as const;
+export const taskStatuses = ["open", "done", "cancelled"] as const;
 export const teamKinds = ["personal", "household"] as const;
 export const membershipRoles = ["owner", "member"] as const;
 export const actorTypes = ["user", "bot"] as const;
@@ -72,7 +72,7 @@ export function resolveNeedsCalendar(
   return previous.needsCalendar;
 }
 
-/** Morning queue. Schedule is strictly overdue; a delegate follow-up includes due now. */
+/** Morning queue. Open tasks only: done and cancelled stay out. Schedule is strictly overdue; a delegate follow-up includes due now. */
 export function inMorningQueue(
   task: {
     status: TaskStatus;
@@ -134,26 +134,29 @@ export const taskSchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
   completedAt: z.string().nullable(),
+  cancelledAt: z.string().nullable(),
   createdBy: actorRefSchema,
 });
 export type Task = z.infer<typeof taskSchema>;
 
-/** Names emitted on GET /teams/:id/events. Tasks are not deleted, so there is no deleted event. */
-export const taskEventTypes = ["created", "updated", "completed"] as const;
+/** Names emitted on GET /teams/:id/events. */
+export const taskEventTypes = ["created", "updated", "completed", "cancelled", "deleted"] as const;
 export type TaskEventType = (typeof taskEventTypes)[number];
 
 /**
- * One task write. `at` is that write's `updatedAt`.
+ * One task write. For create, update, complete, and cancel, `at` is that
+ * write's `updatedAt`. For delete, `at` is when the row was removed.
  * `task` is the same object as the task API. On the process that handled the
- * write, it is the row just saved. On another API process it is the row read
- * when the notice arrived.
+ * write, it is the row just saved, or the row just removed. On another API
+ * process it is the row read when the notice arrived. A deleted row is already
+ * gone, so `task` is null there. `taskId` is enough to drop it.
  */
 export interface TaskEvent {
   type: TaskEventType;
   teamId: string;
   taskId: string;
   at: string;
-  task: Task;
+  task: Task | null;
 }
 
 const dueAt = z.string().datetime({ offset: true }).nullable();
@@ -203,6 +206,19 @@ export const completeTaskSchema = z
   })
   .strict();
 export type CompleteTaskInput = z.infer<typeof completeTaskSchema>;
+
+/** Omit `outcome` and the server stores "cancelled". */
+export const cancelTaskSchema = z
+  .object({
+    outcome: z.string().trim().min(1).max(2000).optional(),
+  })
+  .strict();
+export type CancelTaskInput = z.infer<typeof cancelTaskSchema>;
+
+export interface DeletedTask {
+  id: string;
+  deleted: true;
+}
 
 export const createTeamSchema = z
   .object({
@@ -291,6 +307,8 @@ export const httpOperations = {
   createTask: { method: "POST", path: "/tasks" },
   updateTask: { method: "PATCH", path: "/tasks/:id" },
   completeTask: { method: "POST", path: "/tasks/:id/complete" },
+  cancelTask: { method: "POST", path: "/tasks/:id/cancel" },
+  deleteTask: { method: "DELETE", path: "/tasks/:id" },
   listTasks: { method: "GET", path: "/tasks" },
   listDoImmediately: { method: "GET", path: "/tasks/do-immediately" },
   taskEvents: { method: "GET", path: "/teams/:id/events" },
@@ -354,6 +372,18 @@ export const completeTaskToolSchema = completeTaskSchema.extend({
   id: z.string().uuid(),
 });
 export type CompleteTaskToolInput = z.infer<typeof completeTaskToolSchema>;
+
+export const cancelTaskToolSchema = cancelTaskSchema.extend({
+  id: z.string().uuid(),
+});
+export type CancelTaskToolInput = z.infer<typeof cancelTaskToolSchema>;
+
+export const deleteTaskToolSchema = z
+  .object({
+    id: z.string().uuid(),
+  })
+  .strict();
+export type DeleteTaskToolInput = z.infer<typeof deleteTaskToolSchema>;
 
 /** teamId is optional for a bot token, which belongs to one team. */
 export const registerBotToolSchema = registerBotSchema.extend({
