@@ -1,4 +1,13 @@
-import { addMemberSchema, createTeamSchema, createTokenSchema, type BotTokenSummary, type Member, type TeamSummary } from "@hearth/shared";
+import {
+  addMemberSchema,
+  createTeamSchema,
+  createTokenSchema,
+  registerBotSchema,
+  type BotSummary,
+  type BotTokenSummary,
+  type Member,
+  type TeamSummary,
+} from "@hearth/shared";
 import { and, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { ensurePersonalTeam, findUserByEmail } from "../accounts.js";
@@ -6,7 +15,7 @@ import { requireActor, requireOwner, requireTeam, type AppEnv } from "../actor.j
 import { db } from "../db.js";
 import { HttpError, parseBody } from "../errors.js";
 import { iso, readJson, requireUuid } from "../http.js";
-import { botTokens, memberships, teams, users } from "../schema.js";
+import { botTokens, bots, memberships, teams, users } from "../schema.js";
 import { mintToken } from "../tokens.js";
 
 export const teamRoutes = new Hono<AppEnv>();
@@ -92,6 +101,52 @@ teamRoutes.post("/:teamId/members", async (c) => {
   );
 });
 
+teamRoutes.get("/:teamId/bots", async (c) => {
+  const teamId = c.req.param("teamId");
+  requireUuid(teamId, "teamId");
+  await requireTeam(c.get("actor"), teamId);
+  const rows = await db.select().from(bots).where(eq(bots.teamId, teamId)).orderBy(bots.name, bots.createdAt);
+  return c.json({ bots: rows.map(toBot) });
+});
+
+teamRoutes.post("/:teamId/bots", async (c) => {
+  const teamId = c.req.param("teamId");
+  requireUuid(teamId, "teamId");
+  await requireTeam(c.get("actor"), teamId);
+  const body = parseBody(registerBotSchema, await readJson(c));
+  const inserted = await db
+    .insert(bots)
+    .values({ teamId, agentId: body.agentId, name: body.name })
+    .onConflictDoNothing({ target: [bots.teamId, bots.agentId] })
+    .returning();
+  const created = inserted[0];
+  if (created) return c.json(toBot(created), 201);
+  const [existing] = await db
+    .select()
+    .from(bots)
+    .where(and(eq(bots.teamId, teamId), eq(bots.agentId, body.agentId)))
+    .limit(1);
+  if (!existing) throw new Error("Failed to register bot");
+  if (existing.name === body.name) return c.json(toBot(existing), 200);
+  const [renamed] = await db.update(bots).set({ name: body.name }).where(eq(bots.id, existing.id)).returning();
+  if (!renamed) throw new Error("Failed to register bot");
+  return c.json(toBot(renamed), 200);
+});
+
+teamRoutes.delete("/:teamId/bots/:botId", async (c) => {
+  const teamId = c.req.param("teamId");
+  const botId = c.req.param("botId");
+  requireUuid(teamId, "teamId");
+  requireUuid(botId, "botId");
+  await requireTeam(c.get("actor"), teamId);
+  const [row] = await db
+    .delete(bots)
+    .where(and(eq(bots.id, botId), eq(bots.teamId, teamId)))
+    .returning();
+  if (!row) throw new HttpError(404, "not_found", "Bot not found.");
+  return c.json(toBot(row));
+});
+
 teamRoutes.get("/:teamId/tokens", async (c) => {
   const teamId = c.req.param("teamId");
   requireUuid(teamId, "teamId");
@@ -146,6 +201,16 @@ function toSummary(
     kind: team.kind,
     role,
     createdAt: iso(team.createdAt) ?? new Date(0).toISOString(),
+  };
+}
+
+function toBot(row: typeof bots.$inferSelect): BotSummary {
+  return {
+    id: row.id,
+    teamId: row.teamId,
+    agentId: row.agentId,
+    name: row.name,
+    createdAt: iso(row.createdAt) ?? new Date(0).toISOString(),
   };
 }
 

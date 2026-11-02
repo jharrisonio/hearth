@@ -15,6 +15,20 @@
       "when": 1793577600000,
       "tag": "0001_action",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793664000000,
+      "tag": "0002_idempotency",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1793750400000,
+      "tag": "0003_bots",
+      "breakpoints": true
     }
   ]
 }

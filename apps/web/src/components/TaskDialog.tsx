@@ -1,4 +1,4 @@
-import type { Action, BotTokenSummary, Member, Task } from "@hearth/shared";
+import type { Action, BotSummary, BotTokenSummary, Member, Task } from "@hearth/shared";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -65,6 +65,7 @@ function TaskForm({
 }) {
   const seeded = task ? { important: task.important, urgent: task.urgent } : axesFor(defaultAction);
   const [members, setMembers] = useState<Member[]>([]);
+  const [bots, setBots] = useState<BotSummary[]>([]);
   const [tokens, setTokens] = useState<BotTokenSummary[]>([]);
   const [title, setTitle] = useState(task?.title ?? "");
   const [detail, setDetail] = useState(task?.detail ?? "");
@@ -79,13 +80,16 @@ function TaskForm({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const activeTokens = tokens.filter((token) => token.revokedAt == null || token.id === task?.owner.id);
+  const knownBots = new Set([...bots.map((bot) => bot.id), ...activeTokens.map((token) => token.id)]);
+  const unknownBot = task?.owner.type === "bot" && !knownBots.has(task.owner.id) ? task.owner.id : null;
 
   useEffect(() => {
     let cancelled = false;
-    void Promise.all([api.team(teamId), api.tokens(teamId)])
-      .then(([detail, tokenList]) => {
+    void Promise.all([api.team(teamId), api.bots(teamId), api.tokens(teamId)])
+      .then(([detail, botList, tokenList]) => {
         if (cancelled) return;
         setMembers(detail.members);
+        setBots(botList.bots);
         setTokens(tokenList.tokens);
       })
       .catch((err: unknown) => {
@@ -194,12 +198,18 @@ function TaskForm({
               {member.name}
             </option>
           ))}
+          {bots.map((bot) => (
+            <option key={bot.id} value={ownerKey("bot", bot.id)}>
+              {bot.name}
+            </option>
+          ))}
           {activeTokens.map((token) => (
             <option key={token.id} value={ownerKey("bot", token.id)}>
               {token.label}
               {token.revokedAt ? " (revoked)" : ""}
             </option>
           ))}
+          {unknownBot ? <option value={ownerKey("bot", unknownBot)}>Unregistered bot</option> : null}
         </select>
       </label>
       <label className={`mt-6 block ${label}`}>

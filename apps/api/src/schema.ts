@@ -59,6 +59,21 @@ export const botTokens = pgTable(
   (table) => [index("bot_tokens_team_idx").on(table.teamId)],
 );
 
+/** A bot you can assign a task to. Not a credential — tokens stay in bot_tokens. */
+export const bots = pgTable(
+  "bots",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    teamId: uuid("team_id")
+      .notNull()
+      .references(() => teams.id, { onDelete: "cascade" }),
+    agentId: text("agent_id").notNull(),
+    name: text("name").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [unique("bots_team_agent").on(table.teamId, table.agentId)],
+);
+
 export const tasks = pgTable(
   "tasks",
   {
@@ -87,4 +102,21 @@ export const tasks = pgTable(
     createdById: uuid("created_by_id").notNull(),
   },
   (table) => [index("tasks_team_status_action_idx").on(table.teamId, table.status, table.action)],
+);
+
+/** One successful POST /tasks per actor and Idempotency-Key. `actor_id` is a user or a bot, so it has no foreign key. */
+export const idempotencyKeys = pgTable(
+  "idempotency_keys",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    actorType: actorType("actor_type").notNull(),
+    actorId: uuid("actor_id").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    requestHash: text("request_hash").notNull(),
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => tasks.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [unique("idempotency_keys_actor_key").on(table.actorType, table.actorId, table.idempotencyKey)],
 );

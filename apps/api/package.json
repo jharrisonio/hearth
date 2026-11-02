@@ -6,11 +6,13 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test --test-concurrency=1 src/*.test.ts"
   },
   "dependencies": {
     "@hearth/shared": "workspace:*",
     "@hono/node-server": "^1.19.0",
+    "@modelcontextprotocol/sdk": "1.32.2",
     "drizzle-orm": "^0.44.6",
     "hono": "^4.9.8",
     "pg": "^8.16.3",

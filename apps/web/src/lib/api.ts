@@ -1,6 +1,7 @@
 import type {
   Action,
   AuthConfig,
+  BotSummary,
   BotTokenSummary,
   CurrentUser,
   Member,
@@ -75,6 +76,11 @@ export const api = {
     }),
   revokeToken: (teamId: string, tokenId: string) =>
     request<{ token: BotTokenSummary }>(`/teams/${teamId}/tokens/${tokenId}`, { method: "DELETE" }),
+  bots: (teamId: string) => request<{ bots: BotSummary[] }>(`/teams/${teamId}/bots`),
+  registerBot: (teamId: string, body: { agentId: string; name: string }) =>
+    request<BotSummary>(`/teams/${teamId}/bots`, { method: "POST", body: JSON.stringify(body) }),
+  unregisterBot: (teamId: string, botId: string) =>
+    request<BotSummary>(`/teams/${teamId}/bots/${botId}`, { method: "DELETE" }),
   tasks: (query: TaskQuery) => request<TaskList>(`/tasks${queryString(query)}`),
   doImmediately: (teamId?: string) =>
     request<TaskList>(`/tasks/do-immediately${teamId ? `?teamId=${teamId}` : ""}`),

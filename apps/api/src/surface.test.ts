@@ -1,0 +1,412 @@
+import assert from "node:assert/strict";
+import { after, before, beforeEach, describe, test } from "node:test";
+
+const databaseUrl = process.env.DATABASE_URL ?? "postgres://hearth:hearth@127.0.0.1:5432/hearth_test";
+if (!/\/hearth_test(\?|$)/.test(databaseUrl)) {
+  throw new Error("Refusing to run: DATABASE_URL must use the hearth_test database.");
+}
+process.env.DATABASE_URL = databaseUrl;
+process.env.SESSION_SECRET ??= "test-session-secret-value";
+
+const { createApp } = await import("./app.js");
+const { db, pool, runMigrations } = await import("./db.js");
+const { signSession } = await import("./actor.js");
+const { botTokens, bots, idempotencyKeys, memberships, tasks, teams, users } = await import("./schema.js");
+const { mintToken } = await import("./tokens.js");
+const { and, eq } = await import("drizzle-orm");
+
+const app = createApp();
+const sessionSecret = process.env.SESSION_SECRET;
+
+describe("task surface", { concurrency: 1 }, () => {
+  before(async () => {
+    await runMigrations();
+    await runMigrations();
+    const columns = await pool.query<{ column_name: string }>(
+      `select column_name from information_schema.columns
+       where table_schema = 'public' and table_name in ('idempotency_keys', 'bots')
+       order by table_name, column_name`,
+    );
+    const names = columns.rows.map((row) => row.column_name);
+    for (const column of ["actor_id", "actor_type", "idempotency_key", "request_hash", "task_id"]) {
+      assert.ok(names.includes(column), `idempotency_keys.${column} missing`);
+    }
+    for (const column of ["agent_id", "name", "team_id"]) {
+      assert.ok(names.includes(column), `bots.${column} missing`);
+    }
+  });
+
+  beforeEach(async () => {
+    await pool.query(
+      "TRUNCATE TABLE users, teams, memberships, bot_tokens, bots, tasks, idempotency_keys RESTART IDENTITY CASCADE",
+    );
+  });
+
+  after(async () => {
+    await pool.end();
+  });
+
+  test("idempotent create replays, rejects a different body, and ignores key order", async () => {
+    const fixture = await seed();
+    const body = { teamId: fixture.team.id, title: "Buy oat milk", important: true, urgent: true };
+    const first = await postTask(fixture.secret, body, "oat-milk-1");
+    assert.equal(first.status, 201);
+    assert.equal(first.replayed, null);
+    const task = taskBody(first.json);
+
+    const replay = await postTask(fixture.secret, body, "  oat-milk-1  ");
+    assert.equal(replay.status, 200);
+    assert.equal(replay.replayed, "true");
+    assert.equal(taskBody(replay.json).id, task.id);
+
+    const reordered = await postTask(
+      fixture.secret,
+      { urgent: true, title: "Buy oat milk", teamId: fixture.team.id, important: true },
+      "oat-milk-1",
+    );
+    assert.equal(reordered.status, 200);
+    assert.equal(taskBody(reordered.json).id, task.id);
+    assert.equal(await countTasks(fixture.team.id), 1);
+
+    const clash = await postTask(fixture.secret, { ...body, title: "Buy almond milk" }, "oat-milk-1");
+    assert.equal(clash.status, 409);
+    assert.equal(errorBody(clash.json).code, "idempotency_mismatch");
+    assert.equal(await countTasks(fixture.team.id), 1);
+
+    const userA = await postTask(fixture.secret, body, undefined, cookieFor(fixture.user.id));
+    const userB = await postTask(fixture.secret, body, "oat-milk-1", cookieFor(fixture.user.id));
+    assert.equal(userA.status, 201);
+    assert.equal(userB.status, 201);
+    assert.notEqual(taskBody(userA.json).id, taskBody(userB.json).id);
+    assert.notEqual(taskBody(userB.json).id, task.id);
+
+    const blank = await postTask(fixture.secret, body, "");
+    assert.equal(blank.status, 400);
+    assert.equal(errorBody(blank.json).code, "invalid_idempotency_key");
+  });
+
+  test("concurrent retries store one task", async () => {
+    const fixture = await seed();
+    const body = { teamId: fixture.team.id, title: "Take the bins out" };
+    const results = await Promise.all(Array.from({ length: 8 }, () => postTask(fixture.secret, body, "bins")));
+    assert.equal(await countTasks(fixture.team.id), 1);
+    const ids = new Set(results.map((result) => taskBody(result.json).id));
+    assert.equal(ids.size, 1);
+    assert.equal(results.filter((result) => result.status === 201).length, 1);
+    assert.ok(results.every((result) => result.status === 200 || result.status === 201));
+    const keys = await db.select().from(idempotencyKeys).where(eq(idempotencyKeys.actorId, fixture.tokenId));
+    assert.equal(keys.length, 1);
+  });
+
+  test("a key can be reused after the window", async () => {
+    const fixture = await seed();
+    const body = { teamId: fixture.team.id, title: "First" };
+    const created = await postTask(fixture.secret, body, "again");
+    assert.equal(created.status, 201);
+    await db
+      .update(idempotencyKeys)
+      .set({ createdAt: new Date(Date.now() - 25 * 60 * 60 * 1000) })
+      .where(eq(idempotencyKeys.actorId, fixture.tokenId));
+    const next = await postTask(fixture.secret, { ...body, title: "Second" }, "again");
+    assert.equal(next.status, 201);
+    assert.notEqual(taskBody(next.json).id, taskBody(created.json).id);
+    assert.equal(await countTasks(fixture.team.id), 2);
+  });
+
+  test("registered bots are owners; unknown bots are rejected; tokens still work", async () => {
+    const fixture = await seed();
+    const registered = await call(fixture.secret, "POST", `/teams/${fixture.team.id}/bots`, {
+      agentId: "  grok-fin  ",
+      name: "Fin",
+    });
+    assert.equal(registered.status, 201);
+    const bot = botBody(registered.json);
+    assert.equal(bot.agentId, "grok-fin");
+    assert.equal(bot.name, "Fin");
+    assert.equal("secret" in (registered.json as object), false);
+
+    const again = await call(fixture.secret, "POST", `/teams/${fixture.team.id}/bots`, {
+      agentId: "grok-fin",
+      name: "Fin",
+    });
+    assert.equal(again.status, 200);
+    assert.equal(botBody(again.json).id, bot.id);
+
+    const renamed = await call(fixture.secret, "POST", `/teams/${fixture.team.id}/bots`, {
+      agentId: "grok-fin",
+      name: "Finley",
+    });
+    assert.equal(renamed.status, 200);
+    assert.equal(botBody(renamed.json).id, bot.id);
+    assert.equal(botBody(renamed.json).name, "Finley");
+
+    const listed = await call(fixture.secret, "GET", `/teams/${fixture.team.id}/bots`);
+    assert.equal(listed.status, 200);
+    const botsJson = listed.json as { bots: { id: string; name: string }[] };
+    assert.deepEqual(botsJson.bots.map((row) => row.id), [bot.id]);
+
+    const owned = await postTask(fixture.secret, {
+      teamId: fixture.team.id,
+      title: "Fin's list",
+      owner: { type: "bot", id: bot.id },
+    });
+    assert.equal(owned.status, 201);
+    assert.deepEqual(taskBody(owned.json).owner, { type: "bot", id: bot.id });
+
+    const missing = await postTask(fixture.secret, {
+      teamId: fixture.team.id,
+      title: "Nope",
+      owner: { type: "bot", id: "00000000-0000-4000-8000-000000000099" },
+    });
+    assert.equal(missing.status, 400);
+    assert.equal(errorBody(missing.json).code, "invalid_owner");
+
+    const asToken = await postTask(fixture.secret, {
+      teamId: fixture.team.id,
+      title: "Service owns this",
+      owner: { type: "bot", id: fixture.tokenId },
+    });
+    assert.equal(asToken.status, 201);
+    assert.equal(taskBody(asToken.json).owner.id, fixture.tokenId);
+
+    const removed = await call(fixture.secret, "DELETE", `/teams/${fixture.team.id}/bots/${bot.id}`);
+    assert.equal(removed.status, 200);
+    const after = await postTask(fixture.secret, {
+      teamId: fixture.team.id,
+      title: "After unregister",
+      owner: { type: "bot", id: bot.id },
+    });
+    assert.equal(after.status, 400);
+    const empty = await call(fixture.secret, "GET", `/teams/${fixture.team.id}/bots`);
+    assert.deepEqual((empty.json as { bots: unknown[] }).bots, []);
+  });
+
+  test("MCP tools register, create with idempotency, and call the task routes", async () => {
+    const fixture = await seed();
+    const anon = await rpc(null, "initialize", {
+      protocolVersion: "2025-03-26",
+      capabilities: {},
+      clientInfo: { name: "hearth-test", version: "0" },
+    });
+    assert.equal(anon.status, 401);
+
+    const get = await app.request("/mcp", { method: "GET" });
+    assert.equal(get.status, 405);
+
+    const init = await rpc(fixture.secret, "initialize", {
+      protocolVersion: "2025-03-26",
+      capabilities: {},
+      clientInfo: { name: "hearth-test", version: "0" },
+    });
+    assert.equal(init.status, 200);
+    const initResult = rpcResult(init.json) as { serverInfo?: { name?: string }; capabilities?: { tools?: unknown } };
+    assert.equal(initResult.serverInfo?.name, "hearth");
+    assert.ok(initResult.capabilities?.tools);
+
+    const listed = await rpc(fixture.secret, "tools/list");
+    const tools = (rpcResult(listed.json) as { tools: { name: string }[] }).tools.map((tool) => tool.name).sort();
+    assert.deepEqual(tools, [
+      "complete_task",
+      "create_task",
+      "list_bots",
+      "list_do_immediately",
+      "list_tasks",
+      "register_bot",
+      "unregister_bot",
+      "update_task",
+    ]);
+
+    const registered = toolJson(
+      await rpc(fixture.secret, "tools/call", {
+        name: "register_bot",
+        arguments: { agentId: "grok-rally", name: "Rally" },
+      }),
+    ) as { id: string; name: string; agentId: string };
+    assert.equal(registered.name, "Rally");
+    assert.equal(registered.agentId, "grok-rally");
+
+    const createArgs = {
+      teamId: fixture.team.id,
+      title: "Rally the morning",
+      action: "do_now",
+      important: true,
+      urgent: true,
+      owner: { type: "bot", id: registered.id },
+      idempotencyKey: "rally-1",
+    };
+    const created = toolJson(await rpc(fixture.secret, "tools/call", { name: "create_task", arguments: createArgs })) as {
+      id: string;
+      owner: { id: string };
+    };
+    assert.equal(created.owner.id, registered.id);
+
+    const replayed = toolJson(
+      await rpc(fixture.secret, "tools/call", { name: "create_task", arguments: createArgs }),
+    ) as { id: string };
+    assert.equal(replayed.id, created.id);
+    assert.equal(await countTasks(fixture.team.id), 1);
+
+    const restReplay = await postTask(fixture.secret, { ...createArgs, idempotencyKey: undefined }, "rally-1");
+    assert.equal(restReplay.status, 200);
+    assert.equal(taskBody(restReplay.json).id, created.id);
+
+    const clash = await rpc(fixture.secret, "tools/call", {
+      name: "create_task",
+      arguments: { ...createArgs, title: "Different" },
+    });
+    const clashResult = rpcResult(clash.json) as { isError?: boolean; content?: { text: string }[] };
+    assert.equal(clashResult.isError, true);
+    assert.match(clashResult.content?.[0]?.text ?? "", /idempotency_mismatch/);
+
+    const found = toolJson(
+      await rpc(fixture.secret, "tools/call", {
+        name: "list_tasks",
+        arguments: { action: "do_now", owner: `bot:${registered.id}` },
+      }),
+    ) as { tasks: { id: string }[] };
+    assert.deepEqual(found.tasks.map((task) => task.id), [created.id]);
+
+    const updated = toolJson(
+      await rpc(fixture.secret, "tools/call", {
+        name: "update_task",
+        arguments: { id: created.id, title: "Rally the morning list" },
+      }),
+    ) as { title: string };
+    assert.equal(updated.title, "Rally the morning list");
+
+    const queue = toolJson(
+      await rpc(fixture.secret, "tools/call", { name: "list_do_immediately", arguments: {} }),
+    ) as { tasks: { id: string }[] };
+    assert.ok(queue.tasks.some((task) => task.id === created.id));
+
+    const done = toolJson(
+      await rpc(fixture.secret, "tools/call", {
+        name: "complete_task",
+        arguments: { id: created.id, outcome: "Left on the table" },
+      }),
+    ) as { status: string; outcome: string };
+    assert.equal(done.status, "done");
+    assert.equal(done.outcome, "Left on the table");
+
+    const botsListed = toolJson(await rpc(fixture.secret, "tools/call", { name: "list_bots", arguments: {} })) as {
+      bots: { id: string }[];
+    };
+    assert.deepEqual(botsListed.bots.map((bot) => bot.id), [registered.id]);
+
+    const removed = toolJson(
+      await rpc(fixture.secret, "tools/call", { name: "unregister_bot", arguments: { id: registered.id } }),
+    ) as { id: string };
+    assert.equal(removed.id, registered.id);
+    const rows = await db.select().from(bots).where(and(eq(bots.teamId, fixture.team.id)));
+    assert.equal(rows.length, 0);
+  });
+});
+
+async function seed() {
+  const [user] = await db.insert(users).values({ email: `james-${crypto.randomUUID()}@example.com`, name: "James" }).returning();
+  const [team] = await db.insert(teams).values({ name: "Harrison", kind: "household" }).returning();
+  if (!user || !team) throw new Error("seed failed");
+  await db.insert(memberships).values({ teamId: team.id, userId: user.id, role: "owner" });
+  const minted = mintToken();
+  const [token] = await db
+    .insert(botTokens)
+    .values({
+      teamId: team.id,
+      label: "service",
+      tokenHash: minted.hash,
+      tokenPrefix: minted.prefix,
+      createdByUserId: user.id,
+    })
+    .returning();
+  if (!token) throw new Error("token seed failed");
+  return { user, team, secret: minted.secret, tokenId: token.id };
+}
+
+function cookieFor(userId: string) {
+  return `hearth_session=${signSession(userId, sessionSecret, 3600)}`;
+}
+
+async function postTask(token: string | null, body: Record<string, unknown>, key?: string, cookie?: string) {
+  const payload = { ...body };
+  delete payload.idempotencyKey;
+  return call(cookie ? null : token, "POST", "/tasks", payload, key, cookie);
+}
+
+async function call(
+  token: string | null,
+  method: string,
+  path: string,
+  body?: unknown,
+  key?: string,
+  cookie?: string,
+) {
+  const headers = new Headers();
+  if (body !== undefined) headers.set("content-type", "application/json");
+  if (token) headers.set("authorization", `Bearer ${token}`);
+  if (cookie) headers.set("cookie", cookie);
+  if (key !== undefined) headers.set("idempotency-key", key);
+  const response = await app.request(path, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const text = await response.text();
+  return {
+    status: response.status,
+    json: text ? (JSON.parse(text) as unknown) : null,
+    replayed: response.headers.get("idempotent-replayed"),
+  };
+}
+
+async function rpc(token: string | null, method: string, params?: unknown) {
+  const headers = new Headers({
+    "content-type": "application/json",
+    accept: "application/json, text/event-stream",
+  });
+  if (token) headers.set("authorization", `Bearer ${token}`);
+  if (method !== "initialize") headers.set("mcp-protocol-version", "2025-03-26");
+  const response = await app.request("/mcp", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+  });
+  const text = await response.text();
+  return { status: response.status, json: text ? (JSON.parse(text) as unknown) : null };
+}
+
+function rpcResult(json: unknown) {
+  const result = (json as { result?: unknown }).result;
+  assert.ok(result, `missing MCP result: ${JSON.stringify(json)}`);
+  return result;
+}
+
+function toolJson(response: { json: unknown }) {
+  const result = rpcResult(response.json) as { isError?: boolean; content?: { text?: string }[] };
+  assert.notEqual(result.isError, true, result.content?.[0]?.text);
+  const text = result.content?.[0]?.text;
+  assert.equal(typeof text, "string");
+  return JSON.parse(text ?? "") as unknown;
+}
+
+function taskBody(json: unknown) {
+  const task = json as { id: string; owner: { type: string; id: string }; title: string };
+  assert.equal(typeof task.id, "string");
+  return task;
+}
+
+function botBody(json: unknown) {
+  const bot = json as { id: string; agentId: string; name: string };
+  assert.equal(typeof bot.id, "string");
+  return bot;
+}
+
+function errorBody(json: unknown) {
+  const error = (json as { error?: { code?: string; message?: string } }).error;
+  assert.ok(error?.code, JSON.stringify(json));
+  return error;
+}
+
+async function countTasks(teamId: string) {
+  const rows = await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.teamId, teamId));
+  return rows.length;
+}
