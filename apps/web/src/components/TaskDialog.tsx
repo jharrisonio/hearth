@@ -1,5 +1,6 @@
 import {
   actions,
+  delegateRequiresWaitingOn,
   isHttpUrl,
   suggestAction,
   type Action,
@@ -111,6 +112,8 @@ function TaskForm({
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const busy = saving || cancelling;
   const suggested = suggestAction(important, urgent);
+  const parsedOwner = parseOwnerKey(owner);
+  const waitingRequired = delegateRequiresWaitingOn(action, parsedOwner);
   const ownerChoices = new Set([
     ...members.map((member) => ownerKey("user", member.userId)),
     ...bots.map((bot) => ownerKey("bot", bot.id)),
@@ -188,7 +191,7 @@ function TaskForm({
       setError("A task needs a title.");
       return;
     }
-    if (action === "delegate" && !waitingOn.trim()) {
+    if (delegateRequiresWaitingOn(action, parsedOwner) && !waitingOn.trim()) {
       setError("Say who or what this is waiting on.");
       return;
     }
@@ -308,9 +311,10 @@ function TaskForm({
               value={waitingOn}
               placeholder="e.g. Naomi, plumber, ATO"
               onChange={(event) => setWaitingOn(event.target.value)}
-              required
+              required={waitingRequired}
             />
           </label>
+          {waitingRequired ? null : <p className={hintClass}>Optional. The bot is the one who acts.</p>}
           <label className={labelClass}>
             Follow up
             <input className={fieldClass} type="datetime-local" value={dueAt} onChange={(event) => setDueAt(event.target.value)} />

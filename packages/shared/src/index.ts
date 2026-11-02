@@ -73,6 +73,17 @@ export function resolveNeedsCalendar(
 }
 
 /**
+ * waitingOn names an outsider (Tara, the CRA). A bot owner is already who acts,
+ * so waitingOn may be null. No owner counts as not a bot.
+ */
+export function delegateRequiresWaitingOn(
+  action: Action,
+  owner: { type: ActorType } | null | undefined,
+): boolean {
+  return action === "delegate" && owner?.type !== "bot";
+}
+
+/**
  * Active next action on a project.
  * `later` is a future or dependent support step, not a front.
  * Several fronts may be open at once.
@@ -81,7 +92,11 @@ export function isProjectFront(action: Action): boolean {
   return action === "do_now" || action === "delegate" || action === "schedule";
 }
 
-/** Morning queue. Open tasks only: done, cancelled, and `later` stay out. Schedule is strictly overdue; a delegate follow-up includes due now. */
+/**
+ * Human morning queue. Open tasks only: done, cancelled, and `later` stay out.
+ * Schedule is strictly overdue; an outsider delegate includes due now.
+ * Pass `owner` so a bot-owned delegate stays out. Without `owner`, a delegate is treated as an outsider.
+ */
 export function inMorningQueue(
   task: {
     status: TaskStatus;
@@ -89,6 +104,7 @@ export function inMorningQueue(
     needsCalendar: boolean;
     dueAt: string | Date | null;
     createdAt: string | Date;
+    owner?: { type: ActorType };
   },
   now: Date = new Date(),
 ): boolean {
@@ -100,6 +116,7 @@ export function inMorningQueue(
     return dueMs != null && !Number.isNaN(dueMs) && dueMs < now.getTime();
   }
   if (task.action === "delegate") {
+    if (task.owner?.type === "bot") return false;
     if (dueMs != null && !Number.isNaN(dueMs) && dueMs <= now.getTime()) return true;
     if (dueMs == null) {
       const createdMs = new Date(task.createdAt).getTime();
@@ -107,6 +124,34 @@ export function inMorningQueue(
     }
   }
   // `later`, including a project's future steps, stays out until the action changes.
+  return false;
+}
+
+/**
+ * Open work GET /tasks/do-immediately returns when the caller is a bot token.
+ * `actorId` is that token's id. An open delegate counts at any follow-up.
+ * Schedule counts when it still needs a calendar or is strictly overdue.
+ * do_now stays on the human morning queue: do now is the human doing it.
+ */
+export function inBotQueue(
+  task: {
+    status: TaskStatus;
+    action: Action;
+    needsCalendar: boolean;
+    dueAt: string | Date | null;
+    owner: { type: ActorType; id: string };
+  },
+  actorId: string,
+  now: Date = new Date(),
+): boolean {
+  if (task.status !== "open") return false;
+  if (task.owner.type !== "bot" || task.owner.id !== actorId) return false;
+  if (task.action === "delegate") return true;
+  if (task.action === "schedule") {
+    if (task.needsCalendar) return true;
+    const dueMs = task.dueAt == null ? null : new Date(task.dueAt).getTime();
+    return dueMs != null && !Number.isNaN(dueMs) && dueMs < now.getTime();
+  }
   return false;
 }
 
@@ -174,6 +219,17 @@ export interface TaskEvent {
 const dueAt = z.string().datetime({ offset: true }).nullable();
 const sortOrder = z.number().int().min(0).max(1_000_000).nullable();
 
+/** Outsider a human owner is waiting on. A bot owner may omit it. */
+const waitingOnInput = z
+  .string()
+  .trim()
+  .max(200)
+  .nullable()
+  .optional()
+  .describe(
+    "Required when action is delegate and the owner is not a bot. Optional, and may be null, when owner.type is bot.",
+  );
+
 export const createTaskSchema = z
   .object({
     teamId: z.string().uuid(),
@@ -183,7 +239,7 @@ export const createTaskSchema = z
     important: z.boolean().optional(),
     urgent: z.boolean().optional(),
     action: z.enum(actions).optional(),
-    waitingOn: z.string().trim().max(200).nullable().optional(),
+    waitingOn: waitingOnInput,
     calendarEventId: z.string().trim().max(1024).nullable().optional(),
     needsCalendar: z.boolean().optional(),
     projectId: z.string().uuid().nullable().optional(),
@@ -203,7 +259,7 @@ export const updateTaskSchema = z
     important: z.boolean().optional(),
     urgent: z.boolean().optional(),
     action: z.enum(actions).optional(),
-    waitingOn: z.string().trim().max(200).nullable().optional(),
+    waitingOn: waitingOnInput,
     calendarEventId: z.string().trim().max(1024).nullable().optional(),
     needsCalendar: z.boolean().optional(),
     projectId: z.string().uuid().nullable().optional(),
