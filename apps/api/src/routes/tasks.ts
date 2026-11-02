@@ -9,6 +9,7 @@ import {
   updateTaskSchema,
   type Action,
   type ActorRef,
+  type CreateTaskInput,
   type Task,
   type TaskStatus,
 } from "@hearth/shared";
@@ -20,11 +21,13 @@ import {
   requireActor,
   requireTeam,
   teamIdsFor,
+  type Actor,
   type AppEnv,
 } from "../actor.js";
 import { db } from "../db.js";
 import { blankToNull, HttpError, parseBody } from "../errors.js";
 import { iso, readJson, requireUuid } from "../http.js";
+import { parseIdempotencyKey, withCreateIdempotency } from "../idempotency.js";
 import { tasks } from "../schema.js";
 
 const BLOCKED_UPDATE = new Set([
@@ -113,41 +116,19 @@ taskRoutes.get("/", async (c) => {
 taskRoutes.post("/", async (c) => {
   const actor = c.get("actor");
   const body = parseBody(createTaskSchema, await readJson(c));
+  const key = parseIdempotencyKey(c.req.header("idempotency-key"));
   await requireTeam(actor, body.teamId);
-  const important = body.important ?? false;
-  const urgent = body.urgent ?? false;
-  const action = body.action ?? suggestAction(important, urgent);
-  const waitingOn = action === "delegate" ? blankToNull(body.waitingOn) ?? null : null;
-  assertDelegate(action, waitingOn);
-  const calendarEventId = blankToNull(body.calendarEventId) ?? null;
-  const needsCalendar = resolveNeedsCalendar(action, calendarEventId, body.needsCalendar, null);
-  const owner = body.owner ?? actorRef(actor);
-  await assertOwnerOnTeam(body.teamId, owner);
-  const now = new Date();
-  const dueAt = action === "delegate" && body.dueAt === undefined ? followUpFrom(now) : parseDue(body.dueAt);
-  const [row] = await db
-    .insert(tasks)
-    .values({
-      teamId: body.teamId,
-      title: body.title.trim(),
-      detail: blankToNull(body.detail) ?? null,
-      ownerType: owner.type,
-      ownerId: owner.id,
-      important,
-      urgent,
-      action,
-      waitingOn,
-      calendarEventId,
-      needsCalendar,
-      project: blankToNull(body.project) ?? null,
-      dueAt,
-      createdAt: now,
-      updatedAt: now,
-      createdByType: actor.type,
-      createdById: actor.id,
-    })
-    .returning();
-  if (!row) throw new Error("Failed to create task");
+  const values = taskInsertValues(actor, body, new Date());
+  await assertOwnerOnTeam(body.teamId, values.owner);
+  const { row, replayed } = await withCreateIdempotency(actor, key, body, async (tx) => {
+    const [inserted] = await tx.insert(tasks).values(values.row).returning();
+    if (!inserted) throw new Error("Failed to create task");
+    return inserted;
+  });
+  if (replayed) {
+    c.header("Idempotent-Replayed", "true");
+    return c.json(toTask(row), 200);
+  }
   return c.json(toTask(row), 201);
 });
 
@@ -245,6 +226,40 @@ async function loadTask(id: string) {
   const [row] = await db.select().from(tasks).where(eq(tasks.id, id)).limit(1);
   if (!row) throw new HttpError(404, "not_found", "Task not found.");
   return row;
+}
+
+function taskInsertValues(actor: Actor, body: CreateTaskInput, now: Date) {
+  const important = body.important ?? false;
+  const urgent = body.urgent ?? false;
+  const action = body.action ?? suggestAction(important, urgent);
+  const waitingOn = action === "delegate" ? blankToNull(body.waitingOn) ?? null : null;
+  assertDelegate(action, waitingOn);
+  const calendarEventId = blankToNull(body.calendarEventId) ?? null;
+  const needsCalendar = resolveNeedsCalendar(action, calendarEventId, body.needsCalendar, null);
+  const owner = body.owner ?? actorRef(actor);
+  const dueAt = action === "delegate" && body.dueAt === undefined ? followUpFrom(now) : parseDue(body.dueAt);
+  return {
+    owner,
+    row: {
+      teamId: body.teamId,
+      title: body.title.trim(),
+      detail: blankToNull(body.detail) ?? null,
+      ownerType: owner.type,
+      ownerId: owner.id,
+      important,
+      urgent,
+      action,
+      waitingOn,
+      calendarEventId,
+      needsCalendar,
+      project: blankToNull(body.project) ?? null,
+      dueAt,
+      createdAt: now,
+      updatedAt: now,
+      createdByType: actor.type,
+      createdById: actor.id,
+    },
+  };
 }
 
 function assertDelegate(action: Action, waitingOn: string | null) {

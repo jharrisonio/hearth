@@ -109,7 +109,7 @@ On first sign-in, the user gets a personal team. Households are created explicit
 
 The web app prefixes these paths with `/api`. The API port serves them at the root. Bodies are strict JSON. Errors look like `{ "error": { "code": "…", "message": "…" } }`.
 
-These are the task operations a future MCP wrapper can bind to without adding fields:
+These are the task operations the MCP server binds to. It does not add task fields:
 
 | Operation | Request |
 | --- | --- |
@@ -155,7 +155,7 @@ A task:
 
 `GET /tasks/do-immediately` returns open tasks that are `do_now`, or `schedule` and still need a calendar or have a `dueAt` in the past, or `delegate` with a follow-up at or before now (or no `dueAt` and `createdAt` more than three days ago). Optional `teamId`. Order: important and urgent, then important, then urgent, then the rest; within that, `dueAt` ascending with nulls last; then `updatedAt` descending.
 
-Other routes humans use from the app: `GET /auth/config`, `POST /auth/dev`, `GET /auth/google`, `GET /auth/me`, `POST /auth/logout`, `GET /teams`, `POST /teams`, `GET /teams/:id`, `POST /teams/:id/members`, `GET|POST /teams/:id/tokens`, `DELETE /teams/:id/tokens/:tokenId`.
+Other routes humans use from the app: `GET /auth/config`, `POST /auth/dev`, `GET /auth/google`, `GET /auth/me`, `POST /auth/logout`, `GET /teams`, `POST /teams`, `GET /teams/:id`, `POST /teams/:id/members`, `GET|POST /teams/:id/bots`, `DELETE /teams/:id/bots/:botId`, `GET|POST /teams/:id/tokens`, `DELETE /teams/:id/tokens/:tokenId`.
 
 ### curl
 
@@ -196,6 +196,59 @@ curl -sS -b /tmp/hearth.cj -H 'content-type: application/json' \
 
 curl -sS -H 'authorization: Bearer hth_…' \
   http://127.0.0.1:43124/tasks/do-immediately
+```
+
+### Idempotent create
+
+`POST /tasks` accepts an `Idempotency-Key` header. There is no body field. The key is 1 to 255 printable ASCII characters with no spaces. It is stored for the actor that sent it (the signed-in user, or the bot token) for 24 hours.
+
+The first success returns **201** and the task. The same actor, key, and parsed body inside that window returns **200**, the header `Idempotent-Replayed: true`, and that same task. It does not create another. Key order and surrounding whitespace do not count as a different body. A different body with the same key returns **409** `idempotency_mismatch`. After 24 hours the key can create a new task. Omitting the header keeps the old behaviour: every call creates a task.
+
+```bash
+curl -sS -D - -b /tmp/hearth.cj -H 'content-type: application/json' \
+  -H 'Idempotency-Key: oat-milk-1' \
+  -d '{"teamId":"TEAM","title":"Buy oat milk","important":true,"urgent":true}' \
+  http://127.0.0.1:43124/tasks
+```
+
+## Bot owners
+
+A registered bot is an identity, not a credential. `POST /teams/:id/bots` with `{ "agentId": "…", "name": "Fin" }` creates a row and returns its id. No `hth_…` secret is minted. That id is the task owner: `{ "type": "bot", "id": "…" }`. The same agent id on the same team returns the same bot (200). A different name renames it and keeps the id. `GET /teams/:id/bots` lists them. `DELETE /teams/:id/bots/:botId` unregisters one; tasks already pointing at that id are left as they are.
+
+Anyone who can see the team can register, including the team bot token. A random bot id is rejected with 400 `invalid_owner`. An existing per-bot token can still own a task — that mint stays an escape hatch, and it is not required. Settings in the web app can register a bot and assign it on a task.
+
+## MCP
+
+The API serves a stateless MCP endpoint at `POST /mcp` (Streamable HTTP, JSON responses, no SSE stream). Other methods get 405. Auth is the bot Bearer token, the same `Authorization: Bearer hth_…` header as the REST API. A session cookie is not accepted here.
+
+Tools call the task routes above: `create_task` (pass `idempotencyKey`; it is sent as `Idempotency-Key`; `owner` can be a registered bot), `update_task`, `complete_task`, `list_tasks`, and `list_do_immediately`. List filters match `GET /tasks`. `register_bot`, `list_bots`, and `unregister_bot` manage bot owners. Omit `teamId` on those when the token belongs to one team.
+
+Direct API URL: `http://127.0.0.1:43124/mcp`. Through the web proxy that is `http://127.0.0.1:43123/api/mcp`. A hosted bot needs the public HTTPS API origin, for example `https://<api-host>/mcp`. Grok Bot connects from Cursor's network, so localhost will not work there.
+
+Cursor, in `~/.cursor/mcp.json` or the project's `.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "hearth": {
+      "url": "https://<api-host>/mcp",
+      "headers": {
+        "Authorization": "Bearer hth_…"
+      }
+    }
+  }
+}
+```
+
+Grok Bot: Settings → Plugins → add a custom MCP server. Name it Hearth, set the URL to `https://<api-host>/mcp`, and set the header `Authorization` to `Bearer hth_…`. Attach the plugin in the bot chat. Use a static bearer token. This server does not use OAuth.
+
+An Agent SDK connection file is the same URL and header:
+
+```ts
+export default defineConnection({
+  url: "https://<api-host>/mcp",
+  headers: { Authorization: "Bearer ${HEARTH_BOT_TOKEN}" },
+});
 ```
 
 ## Layout

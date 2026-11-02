@@ -6,7 +6,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { db } from "./db.js";
 import { readEnv } from "./env.js";
 import { HttpError } from "./errors.js";
-import { botTokens, memberships, teams } from "./schema.js";
+import { botTokens, bots, memberships, teams } from "./schema.js";
 import { hashToken } from "./tokens.js";
 
 export type Actor =
@@ -61,15 +61,20 @@ export function unsignValue(value: string, secret: string): string | null {
   return Buffer.from(body, "base64url").toString("utf8");
 }
 
+/** Bot Bearer token, the same check REST uses when Authorization is set. */
+export async function actorFromBearer(header: string | undefined): Promise<Actor> {
+  const match = header ? /^Bearer\s+(\S+)$/i.exec(header) : null;
+  const secret = match?.[1];
+  if (!secret) throw new HttpError(401, "unauthorized", "Bearer token required.");
+  const bot = await botFromSecret(secret);
+  if (!bot) throw new HttpError(401, "unauthorized", "Invalid or revoked token.");
+  return { type: "bot", id: bot.id, teamId: bot.teamId };
+}
+
 export async function requireActor(c: Context<AppEnv>, next: () => Promise<void>) {
   const header = c.req.header("authorization");
   if (header) {
-    const match = /^Bearer\s+(\S+)$/i.exec(header);
-    const secret = match?.[1];
-    if (!secret) throw new HttpError(401, "unauthorized", "Bearer token required.");
-    const bot = await botFromSecret(secret);
-    if (!bot) throw new HttpError(401, "unauthorized", "Invalid or revoked token.");
-    c.set("actor", { type: "bot", id: bot.id, teamId: bot.teamId });
+    c.set("actor", await actorFromBearer(header));
     await next();
     return;
   }
@@ -148,12 +153,20 @@ export async function assertOwnerOnTeam(teamId: string, owner: ActorRef) {
     }
     return;
   }
-  const [bot] = await db
+  const [registered] = await db
+    .select({ id: bots.id })
+    .from(bots)
+    .where(and(eq(bots.id, owner.id), eq(bots.teamId, teamId)))
+    .limit(1);
+  if (registered) return;
+  // A minted hth_ token can still own a task. Registration is not required for that escape hatch.
+  const [token] = await db
     .select({ id: botTokens.id })
     .from(botTokens)
     .where(and(eq(botTokens.id, owner.id), eq(botTokens.teamId, teamId)))
     .limit(1);
-  if (!bot) throw new HttpError(400, "invalid_owner", "That bot is not on this team.");
+  if (token) return;
+  throw new HttpError(400, "invalid_owner", "That bot is not registered on this team.");
 }
 
 export function actorRef(actor: Actor): ActorRef {

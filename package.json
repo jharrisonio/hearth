@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit && pnpm -r --if-present typecheck",
     "isolation-check": "tsx scripts/isolation-check.ts",
     "action-rules": "tsx scripts/action-rules.ts",
+    "test": "pnpm --filter @hearth/api test",
     "icons": "node scripts/gen-icons.mjs"
   },
   "devDependencies": {

@@ -165,6 +165,15 @@ export const createTokenSchema = z
   })
   .strict();
 
+/** Register a bot identity. No secret. `agentId` is the external id, unique per team. */
+export const registerBotSchema = z
+  .object({
+    agentId: z.string().trim().min(1).max(200),
+    name: z.string().trim().min(1).max(80),
+  })
+  .strict();
+export type RegisterBotInput = z.infer<typeof registerBotSchema>;
+
 export const devLoginSchema = z
   .object({
     email: z.string().trim().email().max(200),
@@ -184,6 +193,14 @@ export interface Member {
   email: string;
   name: string;
   role: MembershipRole;
+}
+
+export interface BotSummary {
+  id: string;
+  teamId: string;
+  agentId: string;
+  name: string;
+  createdAt: string;
 }
 
 export interface BotTokenSummary {
@@ -212,7 +229,7 @@ export interface TaskList {
   tasks: Task[];
 }
 
-/** HTTP shapes a future MCP wrapper can bind to without inventing fields. */
+/** HTTP shapes the MCP tools bind to. They do not add task fields. */
 export const httpOperations = {
   createTask: { method: "POST", path: "/tasks" },
   updateTask: { method: "PATCH", path: "/tasks/:id" },
@@ -220,3 +237,82 @@ export const httpOperations = {
   listTasks: { method: "GET", path: "/tasks" },
   listDoImmediately: { method: "GET", path: "/tasks/do-immediately" },
 } as const;
+
+/** Replay window for an Idempotency-Key on POST /tasks, per actor. */
+export const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Header on POST /tasks. The MCP create_task tool sends this from `idempotencyKey`. */
+export const IDEMPOTENCY_KEY_HEADER = "Idempotency-Key";
+
+/** Printable ASCII, no spaces. UUIDs and similar tokens fit. */
+export const idempotencyKeySchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(255)
+  .regex(/^[\x21-\x7E]+$/);
+export type IdempotencyKey = z.infer<typeof idempotencyKeySchema>;
+
+const ownerQuery = z
+  .string()
+  .regex(/^(user|bot):[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+
+/** Filters on GET /tasks. Booleans are JSON values; the HTTP query string uses true/false. */
+export const listTasksQuerySchema = z
+  .object({
+    teamId: z.string().uuid().optional(),
+    action: z.enum(actions).optional(),
+    status: z.enum(taskStatuses).optional(),
+    important: z.boolean().optional(),
+    urgent: z.boolean().optional(),
+    owner: ownerQuery.optional(),
+    dueBefore: z.string().min(1).max(40).optional(),
+    project: z.string().max(120).optional(),
+    mine: z.boolean().optional(),
+  })
+  .strict();
+export type ListTasksQuery = z.infer<typeof listTasksQuerySchema>;
+
+export const doImmediatelyQuerySchema = z
+  .object({
+    teamId: z.string().uuid().optional(),
+  })
+  .strict();
+export type DoImmediatelyQuery = z.infer<typeof doImmediatelyQuerySchema>;
+
+/** create_task arguments. `idempotencyKey` is not a task field; it becomes the HTTP header. */
+export const createTaskToolSchema = createTaskSchema.extend({
+  idempotencyKey: idempotencyKeySchema.optional(),
+});
+export type CreateTaskToolInput = z.infer<typeof createTaskToolSchema>;
+
+export const updateTaskToolSchema = updateTaskSchema.extend({
+  id: z.string().uuid(),
+});
+export type UpdateTaskToolInput = z.infer<typeof updateTaskToolSchema>;
+
+export const completeTaskToolSchema = completeTaskSchema.extend({
+  id: z.string().uuid(),
+});
+export type CompleteTaskToolInput = z.infer<typeof completeTaskToolSchema>;
+
+/** teamId is optional for a bot token, which belongs to one team. */
+export const registerBotToolSchema = registerBotSchema.extend({
+  teamId: z.string().uuid().optional(),
+});
+export type RegisterBotToolInput = z.infer<typeof registerBotToolSchema>;
+
+export const listBotsToolSchema = z
+  .object({
+    teamId: z.string().uuid().optional(),
+  })
+  .strict();
+export type ListBotsToolInput = z.infer<typeof listBotsToolSchema>;
+
+export const unregisterBotToolSchema = z
+  .object({
+    id: z.string().uuid(),
+    teamId: z.string().uuid().optional(),
+  })
+  .strict();
+export type UnregisterBotToolInput = z.infer<typeof unregisterBotToolSchema>;

@@ -1,4 +1,4 @@
-import type { AuthConfig, BotTokenSummary, Member, TeamSummary } from "@hearth/shared";
+import type { AuthConfig, BotSummary, BotTokenSummary, Member, TeamSummary } from "@hearth/shared";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { useAuth } from "@/auth";
@@ -11,26 +11,30 @@ export function Settings() {
   const { teamId } = useParams();
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
-  const [teams, setTeams] = useState<TeamSummary[]>([]);
   const [team, setTeam] = useState<TeamSummary | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [tokens, setTokens] = useState<BotTokenSummary[]>([]);
+  const [bots, setBots] = useState<BotSummary[]>([]);
   const [email, setEmail] = useState("");
+  const [agentId, setAgentId] = useState("");
+  const [botName, setBotName] = useState("");
   const [label, setLabel] = useState("");
   const [secret, setSecret] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [confirmRevoke, setConfirmRevoke] = useState<string | null>(null);
+  const [confirmUnregister, setConfirmUnregister] = useState<string | null>(null);
   const [config, setConfig] = useState<AuthConfig | null>(null);
 
   async function load(id: string) {
     setError(null);
     try {
-      const [detail, tokenList] = await Promise.all([api.team(id), api.tokens(id)]);
+      const [detail, tokenList, botList] = await Promise.all([api.team(id), api.tokens(id), api.bots(id)]);
       setTeam(detail.team);
       setMembers(detail.members);
       setTokens(tokenList.tokens);
+      setBots(botList.bots);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not load this team.");
     } finally {
@@ -44,7 +48,6 @@ export function Settings() {
       .teams()
       .then(({ teams: next }) => {
         if (cancelled) return;
-        setTeams(next);
         if (!teamId) {
           const id = next.find((item) => item.kind === "household")?.id ?? next[0]?.id;
           if (id) navigate(`/teams/${id}`, { replace: true });
@@ -82,6 +85,33 @@ export function Settings() {
       await load(teamId!);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not add that person.");
+    }
+  }
+
+  async function registerBot(event: React.FormEvent) {
+    event.preventDefault();
+    setNotice(null);
+    setError(null);
+    try {
+      const registered = await api.registerBot(teamId!, { agentId: agentId.trim(), name: botName.trim() });
+      setAgentId("");
+      setBotName("");
+      setNotice(`${registered.name} is registered.`);
+      await load(teamId!);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not register that bot.");
+    }
+  }
+
+  async function unregister(botId: string) {
+    setError(null);
+    try {
+      await api.unregisterBot(teamId!, botId);
+      setConfirmUnregister(null);
+      setNotice("Bot unregistered. Tasks already assigned to them keep that owner.");
+      await load(teamId!);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not unregister that bot.");
     }
   }
 
@@ -179,9 +209,52 @@ export function Settings() {
                 <Button type="submit">Add member</Button>
               </form>
             ) : null}
+
+            <h4 className={`mt-12 ${labelClass}`}>Bots</h4>
+            <p className="mt-3 text-[13px] text-white/45">
+              A registered bot is a name you can put on a task. It does not get a secret. One team token can post for all of them.
+            </p>
+            <ul className="mt-6 space-y-4">
+              {bots.length === 0 ? <li className="text-[13px] text-white/35">No bots registered yet.</li> : null}
+              {bots.map((bot) => (
+                <li key={bot.id} className="flex flex-wrap items-baseline justify-between gap-3 text-[15px]">
+                  <span>
+                    {bot.name}
+                    <span className="mt-1 block text-[12px] text-white/40">{bot.agentId}</span>
+                  </span>
+                  {confirmUnregister === bot.id ? (
+                    <span className="flex gap-4">
+                      <Button size="sm" variant="danger" onClick={() => void unregister(bot.id)}>
+                        Unregister
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setConfirmUnregister(null)}>
+                        Cancel
+                      </Button>
+                    </span>
+                  ) : (
+                    <Button size="sm" variant="ghost" onClick={() => setConfirmUnregister(bot.id)}>
+                      Unregister
+                    </Button>
+                  )}
+                </li>
+              ))}
+            </ul>
+            <form onSubmit={(event) => void registerBot(event)} className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-end">
+              <label className={`block flex-1 ${labelClass}`}>
+                Name
+                <input className={fieldClass} value={botName} onChange={(event) => setBotName(event.target.value)} required />
+              </label>
+              <label className={`block flex-1 ${labelClass}`}>
+                Agent id
+                <input className={fieldClass} value={agentId} onChange={(event) => setAgentId(event.target.value)} required />
+              </label>
+              <Button type="submit">Register</Button>
+            </form>
+
             <h4 className={`mt-12 ${labelClass}`}>Bot tokens</h4>
             <p className="mt-3 text-[13px] text-white/45">
-              A token is scoped to this team. Send it as <code>Authorization: Bearer …</code>. The secret is shown once.
+              A token is a credential for this team, separate from a registered bot. Send it as <code>Authorization: Bearer …</code>.
+              The secret is shown once.
             </p>
             {secret ? (
               <div className="mt-6 border-y border-white/15 py-4">

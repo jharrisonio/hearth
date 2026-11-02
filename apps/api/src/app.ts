@@ -3,6 +3,7 @@ import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { pool } from "./db.js";
 import { HttpError } from "./errors.js";
+import { handleMcp } from "./mcp.js";
 import { authRoutes } from "./routes/auth.js";
 import { taskRoutes } from "./routes/tasks.js";
 import { teamRoutes } from "./routes/teams.js";
@@ -18,7 +19,7 @@ export function createApp() {
         origin: (origin) => (allowed.has(origin) ? origin : null),
         credentials: true,
         allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-        allowHeaders: ["Content-Type", "Authorization"],
+        allowHeaders: ["Content-Type", "Authorization", "Idempotency-Key", "MCP-Protocol-Version"],
       }),
     );
   }
@@ -30,6 +31,14 @@ export function createApp() {
   app.route("/", authRoutes);
   app.route("/teams", teamRoutes);
   app.route("/tasks", taskRoutes);
+  app.on(["GET", "DELETE", "PUT", "PATCH"], "/mcp", (c) => {
+    c.header("Allow", "POST");
+    return c.json(
+      { jsonrpc: "2.0", id: null, error: { code: -32000, message: "Method not allowed." } },
+      405,
+    );
+  });
+  app.post("/mcp", (c) => handleMcp(c, app));
   app.notFound((c) => c.json({ error: { code: "not_found", message: "Not found." } }, 404));
   app.onError((err, c) => {
     if (err instanceof HttpError) {
