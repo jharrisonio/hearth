@@ -172,3 +172,17 @@ export async function assertOwnerOnTeam(teamId: string, owner: ActorRef) {
 export function actorRef(actor: Actor): ActorRef {
   return { type: actor.type, id: actor.id };
 }
+
+/** A long-lived stream re-checks this. requireTeam does not see a revoked bot token. */
+export async function assertActorCurrent(actor: Actor, teamId: string) {
+  await requireTeam(actor, teamId);
+  if (actor.type !== "bot") return;
+  const [row] = await db
+    .select({ revokedAt: botTokens.revokedAt })
+    .from(botTokens)
+    .where(eq(botTokens.id, actor.id))
+    .limit(1);
+  if (!row || row.revokedAt) {
+    throw new HttpError(401, "unauthorized", "Invalid or revoked token.");
+  }
+}

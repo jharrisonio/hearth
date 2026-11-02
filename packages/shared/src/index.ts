@@ -103,6 +103,24 @@ export const taskSchema = z.object({
 });
 export type Task = z.infer<typeof taskSchema>;
 
+/** Names emitted on GET /teams/:id/events. Tasks are not deleted, so there is no deleted event. */
+export const taskEventTypes = ["created", "updated", "completed"] as const;
+export type TaskEventType = (typeof taskEventTypes)[number];
+
+/**
+ * One task write. `at` is that write's `updatedAt`.
+ * `task` is the same object as the task API. On the process that handled the
+ * write, it is the row just saved. On another API process it is the row read
+ * when the notice arrived.
+ */
+export interface TaskEvent {
+  type: TaskEventType;
+  teamId: string;
+  taskId: string;
+  at: string;
+  task: Task;
+}
+
 const dueAt = z.string().datetime({ offset: true }).nullable();
 
 export const createTaskSchema = z
@@ -236,6 +254,7 @@ export const httpOperations = {
   completeTask: { method: "POST", path: "/tasks/:id/complete" },
   listTasks: { method: "GET", path: "/tasks" },
   listDoImmediately: { method: "GET", path: "/tasks/do-immediately" },
+  taskEvents: { method: "GET", path: "/teams/:id/events" },
 } as const;
 
 /** Replay window for an Idempotency-Key on POST /tasks, per actor. */

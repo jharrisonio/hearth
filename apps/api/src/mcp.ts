@@ -41,10 +41,11 @@ export async function handleMcp(c: Context, app: FetchApp): Promise<Response> {
     { name: "hearth", version: SERVER_VERSION },
     {
       instructions:
-        "Hearth tasks for the team this bot token belongs to. Pass idempotencyKey on create_task when a retry must return the original task instead of a duplicate. The key lasts 24 hours for this bot. Register Fin, Rally, and other agents with register_bot (agent id and display name, no extra token) and set owner to that bot id.",
+        "Hearth tasks for the team this bot token belongs to. Pass idempotencyKey on create_task when a retry must return the original task instead of a duplicate. The key lasts 24 hours for this bot. Register Fin, Rally, and other agents with register_bot (agent id and display name, no extra token) and set owner to that bot id. Live edits are not pushed over MCP. Subscribe with GET /teams/:teamId/events (text/event-stream, same Bearer token). Read the hearth://task-events resource for the exact URL and the event shape.",
     },
   );
   registerTaskTools(server, app, authorization ?? "");
+  registerTaskEventsResource(server, app, authorization ?? "");
 
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
@@ -56,6 +57,45 @@ export async function handleMcp(c: Context, app: FetchApp): Promise<Response> {
   } finally {
     await server.close();
   }
+}
+
+function registerTaskEventsResource(server: McpServer, app: FetchApp, authorization: string) {
+  server.registerResource(
+    "task-events",
+    "hearth://task-events",
+    {
+      description:
+        "How to subscribe to live task changes for this bot. Server-sent events on the REST API, not an MCP stream.",
+      mimeType: "text/plain",
+    },
+    async (uri) => ({
+      contents: [
+        {
+          uri: uri.href,
+          mimeType: "text/plain",
+          text: await taskEventsText(app, authorization),
+        },
+      ],
+    }),
+  );
+}
+
+async function taskEventsText(app: FetchApp, authorization: string) {
+  const listed = await callApi(app, authorization, "/teams");
+  const teams =
+    listed.status < 400 ? ((listed.body as { teams?: { id: string }[] } | null)?.teams ?? []) : [];
+  const urls = teams.length
+    ? teams.map((team) => `GET /teams/${team.id}/events`).join("\n")
+    : httpOperations.taskEvents.path;
+  return [
+    "Live task changes are server-sent events, not an MCP stream.",
+    "Send the same Authorization: Bearer token and Accept: text/event-stream.",
+    urls,
+    "Through the web origin, prefix the path with /api.",
+    "The event name is created, updated, or completed. data is JSON with type, teamId, taskId, at, and task (the same task object as GET /tasks).",
+    "event ready means the subscription is on. Lines starting with ':' are keepalives. event reconnect means open the URL again and refetch with list_tasks.",
+    "There is no backlog. An idempotent replay does not emit another created event. Tasks are not deleted.",
+  ].join("\n");
 }
 
 function registerTaskTools(server: McpServer, app: FetchApp, authorization: string) {

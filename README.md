@@ -155,7 +155,7 @@ A task:
 
 `GET /tasks/do-immediately` returns open tasks that are `do_now`, or `schedule` and still need a calendar or have a `dueAt` in the past, or `delegate` with a follow-up at or before now (or no `dueAt` and `createdAt` more than three days ago). Optional `teamId`. Order: important and urgent, then important, then urgent, then the rest; within that, `dueAt` ascending with nulls last; then `updatedAt` descending.
 
-Other routes humans use from the app: `GET /auth/config`, `POST /auth/dev`, `GET /auth/google`, `GET /auth/me`, `POST /auth/logout`, `GET /teams`, `POST /teams`, `GET /teams/:id`, `POST /teams/:id/members`, `GET|POST /teams/:id/bots`, `DELETE /teams/:id/bots/:botId`, `GET|POST /teams/:id/tokens`, `DELETE /teams/:id/tokens/:tokenId`.
+Other routes humans use from the app: `GET /auth/config`, `POST /auth/dev`, `GET /auth/google`, `GET /auth/me`, `POST /auth/logout`, `GET /teams`, `POST /teams`, `GET /teams/:id`, `GET /teams/:id/events`, `POST /teams/:id/members`, `GET|POST /teams/:id/bots`, `DELETE /teams/:id/bots/:botId`, `GET|POST /teams/:id/tokens`, `DELETE /teams/:id/tokens/:tokenId`.
 
 ### curl
 
@@ -217,11 +217,50 @@ A registered bot is an identity, not a credential. `POST /teams/:id/bots` with `
 
 Anyone who can see the team can register, including the team bot token. A random bot id is rejected with 400 `invalid_owner`. An existing per-bot token can still own a task — that mint stays an escape hatch, and it is not required. Settings in the web app can register a bot and assign it on a task.
 
+## Live task events
+
+`GET /teams/:id/events` is a server-sent events stream of task creates, updates, and completions on that team. Auth is the same as the rest of the API: `Authorization: Bearer hth_…` or the `hearth_session` cookie. A bot token only opens its own team. Anyone else gets 403 or 404.
+
+The browser `EventSource` API cannot set an `Authorization` header. A Grok bot should stream the response with `fetch` (or `curl -N`) and send the Bearer token. A signed-in human can use `EventSource` on the web origin, which sends the cookie.
+
+```bash
+curl -N -H 'authorization: Bearer hth_…' -H 'accept: text/event-stream' \
+  http://127.0.0.1:43124/teams/TEAM/events
+```
+
+Through the web proxy that is `http://127.0.0.1:43123/api/teams/TEAM/events`. On Railway, use the public HTTPS origin the same way (`https://<api-host>/teams/TEAM/events` or `https://<web-host>/api/teams/TEAM/events`).
+
+The first message is `event: ready` with `{"teamId":"…"}` and `retry: 3000`. Each change is one message. The event name is `created`, `updated`, or `completed`. The data is JSON:
+
+```json
+{
+  "type": "created",
+  "teamId": "…",
+  "taskId": "…",
+  "at": "2026-11-02T12:00:00.000Z",
+  "task": {}
+}
+```
+
+`at` is that write's `updatedAt`. `task` is the same object `GET /tasks` returns, so a bot can apply it without a second request. The stream is live only: there is no backlog, and `Last-Event-ID` is not replayed. An idempotent replay of `POST /tasks` does not send another `created`. Tasks are not deleted, so there is no `deleted` event.
+
+Lines that start with `:` are keepalives, about every 20 seconds. They are not task changes. Access is checked when the stream opens and again on each keepalive.
+
+Railway's public HTTP proxy closes a request after 5 minutes with no bytes, and after 15 minutes even when bytes are flowing. WebSockets are exempt; this stream is not. The keepalive stays under that idle limit and under nginx's default 60 second read timeout. The API closes the stream itself after 14 minutes with `event: reconnect` and `{"reason":"max_duration"}`. Open the URL again, and call `GET /tasks` (or MCP `list_tasks`) for anything missed while disconnected. A revoked token or a removed member gets `{"reason":"access_ended"}`. The next connection is then 401 or 403; stop in that case.
+
+`SSE_HEARTBEAT_MS` (default 20000, clamped to 200–30000) and `SSE_MAX_MS` (default 840000, clamped to 200–840000) override those intervals.
+
+Every API process listens on Postgres. The process that wrote the task sends the event with that row. Other processes send the same type and time with the row they read when the notice arrives. The notice itself is only ids, because Postgres caps a notify payload at 8000 bytes.
+
+The web nginx proxy turns off response buffering for `/api/` and waits up to 15 minutes between chunks, so a bot can subscribe through the web origin. Outbound webhooks are not in this version. A subscription would make the API call a URL a bot supplies, and this stream already covers a bot that can hold a connection.
+
 ## MCP
 
 The API serves a stateless MCP endpoint at `POST /mcp` (Streamable HTTP, JSON responses, no SSE stream). Other methods get 405. Auth is the bot Bearer token, the same `Authorization: Bearer hth_…` header as the REST API. A session cookie is not accepted here.
 
 Tools call the task routes above: `create_task` (pass `idempotencyKey`; it is sent as `Idempotency-Key`; `owner` can be a registered bot), `update_task`, `complete_task`, `list_tasks`, and `list_do_immediately`. List filters match `GET /tasks`. `register_bot`, `list_bots`, and `unregister_bot` manage bot owners. Omit `teamId` on those when the token belongs to one team.
+
+`POST /mcp` does not stream task changes. The server instructions and the `hearth://task-events` resource point at `GET /teams/:id/events`. See Live task events above.
 
 Direct API URL: `http://127.0.0.1:43124/mcp`. Through the web proxy that is `http://127.0.0.1:43123/api/mcp`. A hosted bot needs the public HTTPS API origin, for example `https://<api-host>/mcp`. Grok Bot connects from Cursor's network, so localhost will not work there.
 
@@ -263,4 +302,4 @@ Schema changes need a new SQL file under `apps/api/drizzle` and a matching entry
 
 ## Not in v1
 
-Attachments, email links, live Google Calendar create/sync, a Project entity, and native apps. A task can store a calendar event id. Railway config is in the repo; this repo does not create or deploy the Railway project.
+Attachments, email links, live Google Calendar create/sync, a Project entity, outbound webhooks, and native apps. A task can store a calendar event id. Railway config is in the repo; this repo does not create or deploy the Railway project.

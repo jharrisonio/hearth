@@ -1,7 +1,8 @@
-import { serve } from "@hono/node-server";
+import { serve, type ServerType } from "@hono/node-server";
 import { createApp } from "./app.js";
 import { pool, runMigrations } from "./db.js";
 import { assertRuntime, readEnv } from "./env.js";
+import { closeTaskEvents } from "./events.js";
 import { seedIfEnabled } from "./seed.js";
 
 const env = readEnv();
@@ -18,9 +19,17 @@ const server = serve(
 );
 
 async function shutdown() {
+  // SSE clients would otherwise hold the process open until the platform kills it.
   server.close();
+  closeConnections(server);
+  await closeTaskEvents();
   await pool.end();
   process.exit(0);
+}
+
+function closeConnections(server: ServerType) {
+  const closer = server as { closeAllConnections?: () => void };
+  closer.closeAllConnections?.();
 }
 
 process.on("SIGTERM", () => {

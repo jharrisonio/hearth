@@ -13,6 +13,7 @@ import { Hono } from "hono";
 import { ensurePersonalTeam, findUserByEmail } from "../accounts.js";
 import { requireActor, requireOwner, requireTeam, type AppEnv } from "../actor.js";
 import { db } from "../db.js";
+import { ensureTaskEvents, openTaskEventStream } from "../events.js";
 import { HttpError, parseBody } from "../errors.js";
 import { iso, readJson, requireUuid } from "../http.js";
 import { botTokens, bots, memberships, teams, users } from "../schema.js";
@@ -57,6 +58,14 @@ teamRoutes.post("/", async (c) => {
     return team;
   });
   return c.json(toSummary(created, "owner"), 201);
+});
+
+teamRoutes.get("/:teamId/events", async (c) => {
+  const teamId = c.req.param("teamId");
+  requireUuid(teamId, "teamId");
+  await requireTeam(c.get("actor"), teamId);
+  await ensureTaskEvents();
+  return openTaskEventStream(c, teamId);
 });
 
 teamRoutes.get("/:teamId", async (c) => {

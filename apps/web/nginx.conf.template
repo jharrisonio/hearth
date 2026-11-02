@@ -25,9 +25,20 @@ server {
     rewrite ^/api/(.*)$ /$1 break;
     proxy_pass ${API_SCHEME}://$hearth_api_host:$hearth_api_port;
     proxy_http_version 1.1;
+    # Task SSE is a long response of small chunks. Buffering holds them until
+    # the buffer fills or the upstream closes. Railway's edge drops an HTTP
+    # request after 5 idle minutes, and after 15 minutes even with traffic.
+    # The API writes a keepalive well inside 60s (nginx's default read
+    # timeout) and closes the stream before 15 minutes. 900s is that cap,
+    # measured between chunks, not for the whole response.
+    proxy_buffering off;
+    gzip off;
+    proxy_read_timeout 900s;
+    proxy_send_timeout 900s;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Connection "";
   }
 
   location / {
