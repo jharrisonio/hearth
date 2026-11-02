@@ -84,6 +84,7 @@ function checkMorningQueue() {
 
   assert(inMorningQueue({ ...base, action: "do_now", dueAt: future }, now), "do_now is always in the queue");
   assert(!inMorningQueue({ ...base, status: "done", action: "do_now" }, now), "done tasks stay out");
+  assert(!inMorningQueue({ ...base, status: "cancelled", action: "do_now" }, now), "cancelled tasks stay out");
   assert(
     inMorningQueue({ ...base, action: "schedule", needsCalendar: true, dueAt: future }, now),
     "schedule that needs a calendar is in",

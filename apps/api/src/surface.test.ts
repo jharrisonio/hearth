@@ -219,10 +219,12 @@ describe("task surface", { concurrency: 1 }, () => {
     const listed = await rpc(fixture.secret, "tools/list");
     const tools = (rpcResult(listed.json) as { tools: { name: string }[] }).tools.map((tool) => tool.name).sort();
     assert.deepEqual(tools, [
+      "cancel_task",
       "complete_task",
       "create_area",
       "create_project",
       "create_task",
+      "delete_task",
       "list_areas",
       "list_bots",
       "list_do_immediately",
@@ -592,6 +594,120 @@ describe("task surface", { concurrency: 1 }, () => {
     assert.equal(missing.status, 400);
     assert.equal(errorBody(missing.json).code, "invalid_area");
     assert.equal((await db.select().from(areas)).length >= 1, true);
+  });
+
+  test("cancel keeps an audit row and delete removes the task", async () => {
+    const fixture = await seed();
+    const other = await seed();
+    const created = await postTask(
+      fixture.secret,
+      { teamId: fixture.team.id, title: "Buy oat milk", action: "do_now", important: true, urgent: true },
+      "oat-1",
+    );
+    assert.equal(created.status, 201);
+    const task = taskBody(created.json);
+
+    const blocked = await call(fixture.secret, "PATCH", `/tasks/${task.id}`, { cancelledAt: new Date().toISOString() });
+    assert.equal(blocked.status, 400);
+    assert.equal(errorBody(blocked.json).code, "field_immutable");
+
+    const deniedCancel = await call(other.secret, "POST", `/tasks/${task.id}/cancel`, {});
+    assert.equal(deniedCancel.status, 403);
+    const deniedDelete = await call(other.secret, "DELETE", `/tasks/${task.id}`);
+    assert.equal(deniedDelete.status, 403);
+
+    const blank = await call(fixture.secret, "POST", `/tasks/${task.id}/cancel`, { outcome: "   " });
+    assert.equal(blank.status, 400);
+    assert.equal(errorBody(blank.json).code, "invalid_body");
+
+    const dropped = await call(fixture.secret, "POST", `/tasks/${task.id}/cancel`, {});
+    assert.equal(dropped.status, 200);
+    const cancelled = dropped.json as {
+      id: string;
+      status: string;
+      outcome: string | null;
+      cancelledAt: string | null;
+      completedAt: string | null;
+      updatedAt: string;
+    };
+    assert.equal(cancelled.id, task.id);
+    assert.equal(cancelled.status, "cancelled");
+    assert.equal(cancelled.outcome, "cancelled");
+    assert.equal(typeof cancelled.cancelledAt, "string");
+    assert.equal(cancelled.completedAt, null);
+    assert.equal(cancelled.cancelledAt, cancelled.updatedAt);
+
+    const open = await call(fixture.secret, "GET", `/tasks?teamId=${fixture.team.id}&status=open`);
+    assert.equal(open.status, 200);
+    assert.equal((open.json as { tasks: { id: string }[] }).tasks.some((row) => row.id === task.id), false);
+    const queue = await call(fixture.secret, "GET", `/tasks/do-immediately?teamId=${fixture.team.id}`);
+    assert.equal((queue.json as { tasks: { id: string }[] }).tasks.some((row) => row.id === task.id), false);
+    const audit = await call(fixture.secret, "GET", `/tasks?teamId=${fixture.team.id}&status=cancelled`);
+    assert.deepEqual(
+      (audit.json as { tasks: { id: string }[] }).tasks.map((row) => row.id),
+      [task.id],
+    );
+    const all = await call(fixture.secret, "GET", `/tasks?teamId=${fixture.team.id}`);
+    assert.equal((all.json as { tasks: { id: string }[] }).tasks.some((row) => row.id === task.id), true);
+
+    const twice = await call(fixture.secret, "POST", `/tasks/${task.id}/cancel`, { outcome: "again" });
+    assert.equal(twice.status, 409);
+    assert.equal(errorBody(twice.json).code, "already_cancelled");
+    const completeCancelled = await call(fixture.secret, "POST", `/tasks/${task.id}/complete`, { outcome: "nope" });
+    assert.equal(completeCancelled.status, 409);
+    assert.equal(errorBody(completeCancelled.json).code, "already_cancelled");
+
+    const finished = await postTask(fixture.secret, { teamId: fixture.team.id, title: "Done already" });
+    const finishedId = taskBody(finished.json).id;
+    const done = await call(fixture.secret, "POST", `/tasks/${finishedId}/complete`, { outcome: "Filed" });
+    assert.equal(done.status, 200);
+    const cancelDone = await call(fixture.secret, "POST", `/tasks/${finishedId}/cancel`, {});
+    assert.equal(cancelDone.status, 409);
+    assert.equal(errorBody(cancelDone.json).code, "already_done");
+
+    const noted = await postTask(fixture.secret, { teamId: fixture.team.id, title: "Wrong list", action: "do_now" });
+    const notedId = taskBody(noted.json).id;
+    const withReason = toolJson(
+      await rpc(fixture.secret, "tools/call", {
+        name: "cancel_task",
+        arguments: { id: notedId, outcome: "duplicate of the bins" },
+      }),
+    ) as { status: string; outcome: string; cancelledAt: string | null; completedAt: string | null };
+    assert.equal(withReason.status, "cancelled");
+    assert.equal(withReason.outcome, "duplicate of the bins");
+    assert.equal(withReason.completedAt, null);
+    assert.equal(typeof withReason.cancelledAt, "string");
+    const queueAfter = toolJson(
+      await rpc(fixture.secret, "tools/call", { name: "list_do_immediately", arguments: { teamId: fixture.team.id } }),
+    ) as { tasks: { id: string }[] };
+    assert.equal(queueAfter.tasks.some((row) => row.id === notedId), false);
+
+    const duplicate = await postTask(fixture.secret, { teamId: fixture.team.id, title: "Accidental" }, "accidental-1");
+    const duplicateId = taskBody(duplicate.json).id;
+    assert.equal((await db.select().from(idempotencyKeys).where(eq(idempotencyKeys.taskId, duplicateId))).length, 1);
+    const removed = toolJson(
+      await rpc(fixture.secret, "tools/call", { name: "delete_task", arguments: { id: duplicateId } }),
+    ) as { id: string; deleted: boolean };
+    assert.deepEqual(removed, { id: duplicateId, deleted: true });
+    assert.equal(await countTasks(fixture.team.id), 3);
+    assert.equal((await db.select().from(idempotencyKeys).where(eq(idempotencyKeys.taskId, duplicateId))).length, 0);
+    const reused = await postTask(fixture.secret, { teamId: fixture.team.id, title: "Accidental again" }, "accidental-1");
+    assert.equal(reused.status, 201);
+    assert.notEqual(taskBody(reused.json).id, duplicateId);
+
+    const gone = await call(fixture.secret, "DELETE", `/tasks/${duplicateId}`);
+    assert.equal(gone.status, 404);
+    assert.equal(errorBody(gone.json).code, "not_found");
+    const missing = await call(fixture.secret, "DELETE", `/tasks/${crypto.randomUUID()}`);
+    assert.equal(missing.status, 404);
+    const badId = await call(fixture.secret, "DELETE", "/tasks/not-a-uuid");
+    assert.equal(badId.status, 400);
+
+    const removedDone = await call(fixture.secret, "DELETE", `/tasks/${finishedId}`);
+    assert.equal(removedDone.status, 200);
+    assert.deepEqual(removedDone.json, { id: finishedId, deleted: true });
+    const doneList = await call(fixture.secret, "GET", `/tasks?teamId=${fixture.team.id}&status=done`);
+    assert.equal((doneList.json as { tasks: { id: string }[] }).tasks.some((row) => row.id === finishedId), false);
   });
 });
 

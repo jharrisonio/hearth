@@ -1,4 +1,6 @@
 import {
+  cancelTaskSchema,
+  cancelTaskToolSchema,
   completeTaskToolSchema,
   createAreaSchema,
   createAreaToolSchema,
@@ -6,6 +8,7 @@ import {
   createProjectToolSchema,
   createTaskSchema,
   createTaskToolSchema,
+  deleteTaskToolSchema,
   doImmediatelyQuerySchema,
   httpOperations,
   IDEMPOTENCY_KEY_HEADER,
@@ -47,7 +50,7 @@ export async function handleMcp(c: Context, app: FetchApp): Promise<Response> {
     { name: "hearth", version: SERVER_VERSION },
     {
       instructions:
-        "Hearth tasks for the team this bot token belongs to. Pass idempotencyKey on create_task when a retry must return the original task instead of a duplicate. The key lasts 24 hours for this bot. A project is a multi-step outcome; an area is a life or work domain such as House or Finance. Link them with projectId and areaId. Register Fin, Rally, and other agents with register_bot (agent id and display name, no extra token) and set owner to that bot id. Set source to { type: \"email\" | \"url\", href, label?, externalId? } to link the originating email or page. For Gmail, href is https://mail.google.com/mail/u/0/#all/<threadId> and externalId is the message or thread id. Pass source: null on update_task to clear it. Live edits are not pushed over MCP. Subscribe with GET /teams/:teamId/events (text/event-stream, same Bearer token). Read the hearth://task-events resource for the exact URL and the event shape.",
+        "Hearth tasks for the team this bot token belongs to. Pass idempotencyKey on create_task when a retry must return the original task instead of a duplicate. The key lasts 24 hours for this bot. A project is a multi-step outcome; an area is a life or work domain such as House or Finance. Link them with projectId and areaId. Register Fin, Rally, and other agents with register_bot (agent id and display name, no extra token) and set owner to that bot id. Set source to { type: \"email\" | \"url\", href, label?, externalId? } to link the originating email or page. For Gmail, href is https://mail.google.com/mail/u/0/#all/<threadId> and externalId is the message or thread id. Pass source: null on update_task to clear it. cancel_task keeps the row for audit. delete_task removes a mistake or duplicate. Live edits are not pushed over MCP. Subscribe with GET /teams/:teamId/events (text/event-stream, same Bearer token). Read the hearth://task-events resource for the exact URL and the event shape.",
     },
   );
   registerTaskTools(server, app, authorization ?? "");
@@ -98,9 +101,10 @@ async function taskEventsText(app: FetchApp, authorization: string) {
     "Send the same Authorization: Bearer token and Accept: text/event-stream.",
     urls,
     "Through the web origin, prefix the path with /api.",
-    "The event name is created, updated, or completed. data is JSON with type, teamId, taskId, at, and task (the same task object as GET /tasks, including source).",
+    "The event name is created, updated, completed, cancelled, or deleted. data is JSON with type, teamId, taskId, at, and task (the same task object as GET /tasks, including source).",
+    "On deleted, task is that row on the process that removed it, and null on another process because the row is already gone. taskId is enough to drop it.",
     "event ready means the subscription is on. Lines starting with ':' are keepalives. event reconnect means open the URL again and refetch with list_tasks.",
-    "There is no backlog. An idempotent replay does not emit another created event. Tasks are not deleted.",
+    "There is no backlog. An idempotent replay does not emit another created event.",
   ].join("\n");
 }
 
@@ -128,7 +132,7 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "update_task",
     {
       description:
-        "Update a task (PATCH /tasks/:id). Status cannot be changed here. Complete the task with complete_task. owner, when type bot, must be a bot registered on the team (or an existing token id). Pass projectId or areaId as a uuid to set that link, or null to clear it. Omit either field to leave it unchanged. source replaces the link; null clears it. Omit source to leave the link unchanged.",
+        "Update a task (PATCH /tasks/:id). Status cannot be changed here. Complete the task with complete_task, or cancel it with cancel_task. owner, when type bot, must be a bot registered on the team (or an existing token id). Pass projectId or areaId as a uuid to set that link, or null to clear it. Omit either field to leave it unchanged. source replaces the link; null clears it. Omit source to leave the link unchanged.",
       inputSchema: updateTaskToolSchema,
     },
     async ({ id, ...patch }) => {
@@ -156,10 +160,38 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
   );
 
   server.registerTool(
+    "cancel_task",
+    {
+      description:
+        'Cancel a task and keep the row (POST /tasks/:id/cancel). Optional outcome; the default is "cancelled". The task leaves open lists and the morning queue. Emits a cancelled event.',
+      inputSchema: cancelTaskToolSchema,
+    },
+    async ({ id, outcome }) => {
+      const parsed = cancelTaskSchema.parse(outcome === undefined ? {} : { outcome });
+      return asTool(await callApi(app, authorization, `/tasks/${id}/cancel`, {
+        method: httpOperations.cancelTask.method,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(parsed),
+      }));
+    },
+  );
+
+  server.registerTool(
+    "delete_task",
+    {
+      description:
+        "Permanently delete a task (DELETE /tasks/:id). For a mistake or a duplicate. Emits a deleted event. The row is gone, and an Idempotency-Key that pointed at it can be used again.",
+      inputSchema: deleteTaskToolSchema,
+    },
+    async ({ id }) =>
+      asTool(await callApi(app, authorization, `/tasks/${id}`, { method: httpOperations.deleteTask.method })),
+  );
+
+  server.registerTool(
     "list_tasks",
     {
       description:
-        "List tasks (GET /tasks). Each task includes source (an email or url link, or null), plus project and area when set. Filters: teamId, action (do_now, delegate, schedule, later), status (open or done), important, urgent, owner (user:<uuid> or bot:<uuid>), dueBefore, projectId, areaId, mine. Omit teamId to use this bot's team.",
+        "List tasks (GET /tasks). Each task includes source (an email or url link, or null), plus project and area when set. Filters: teamId, action (do_now, delegate, schedule, later), status (open, done, or cancelled), important, urgent, owner (user:<uuid> or bot:<uuid>), dueBefore, projectId, areaId, mine. Omit teamId to use this bot's team. status=open hides cancelled tasks. status=cancelled is the audit list.",
       inputSchema: listTasksQuerySchema,
     },
     async (query) => asTool(await callApi(app, authorization, `${httpOperations.listTasks.path}${queryString(query)}`)),
@@ -169,7 +201,7 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "list_do_immediately",
     {
       description:
-        "Morning queue (GET /tasks/do-immediately): open do_now tasks, schedule tasks that still need a calendar or are overdue, and delegate follow-ups that are due. Optional teamId.",
+        "Morning queue (GET /tasks/do-immediately): open do_now tasks, schedule tasks that still need a calendar or are overdue, and delegate follow-ups that are due. Done and cancelled tasks stay out. Optional teamId.",
       inputSchema: doImmediatelyQuerySchema,
     },
     async (query) =>

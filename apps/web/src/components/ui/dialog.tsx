@@ -23,10 +23,10 @@ export function DialogContent({
   if (variant === "modal") {
     return (
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="hearth-pop fixed inset-0 z-40 bg-black/80 backdrop-blur-[2px]" />
+        <DialogPrimitive.Overlay className="hearth-pop fixed inset-0 z-[70] bg-black/80 backdrop-blur-[2px]" />
         <DialogPrimitive.Content
           className={cn(
-            "hearth-pop fixed left-1/2 top-1/2 z-50 max-h-[min(640px,calc(100dvh-48px))] w-[min(420px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto border border-[#222] bg-black px-9 pb-9 pt-12 text-white",
+            "hearth-pop fixed left-1/2 top-1/2 z-[80] max-h-[min(640px,calc(100dvh-48px))] w-[min(420px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto border border-[#222] bg-black px-9 pb-9 pt-12 text-white",
             className,
           )}
           {...props}

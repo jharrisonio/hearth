@@ -97,12 +97,13 @@ describe("task events", { concurrency: 1 }, () => {
       for (const stream of [bot, human]) {
         const events = taskEvents(stream.text());
         const match = events.find((event) => event.taskId === task.id);
-        assert.ok(match);
-        assert.equal(match.type, "created");
-        assert.equal(match.teamId, home.team.id);
-        assert.equal(match.at, match.task.updatedAt);
-        assert.equal(match.task.title, "Buy oat milk");
-        assert.equal(match.task.id, task.id);
+      assert.ok(match);
+      assert.ok(match.task);
+      assert.equal(match.type, "created");
+      assert.equal(match.teamId, home.team.id);
+      assert.equal(match.at, match.task.updatedAt);
+      assert.equal(match.task.title, "Buy oat milk");
+      assert.equal(match.task.id, task.id);
         assert.ok(stream.text().includes(`id: ${task.id}@${match.at}`));
         assert.equal(events.some((event) => event.taskId === taskBody(awayTask.json).id), false);
         assert.equal(events.some((event) => event.taskId === missedId), false);
@@ -130,9 +131,10 @@ describe("task events", { concurrency: 1 }, () => {
       const id = taskBody(created.json).id;
       await stream.readUntil((text) => taskEvents(text).some((event) => event.taskId === id && event.type === "created"));
       const createdEvent = taskEvents(stream.text()).find((event) => event.taskId === id && event.type === "created");
-      assert.deepEqual(createdEvent?.task.source, gmailSource);
-      assert.equal(createdEvent?.task.project, null);
-      assert.equal(createdEvent?.task.area, null);
+      assert.ok(createdEvent?.task);
+      assert.deepEqual(createdEvent.task.source, gmailSource);
+      assert.equal(createdEvent.task.project, null);
+      assert.equal(createdEvent.task.area, null);
 
       const replay = await postTask(
         fixture.secret,
@@ -156,17 +158,18 @@ describe("task events", { concurrency: 1 }, () => {
         areaId,
       });
       assert.equal(patched.status, 200);
-      await stream.readUntil((text) => taskEvents(text).some((event) => event.type === "updated" && event.task.title === "Bins tonight"));
+      await stream.readUntil((text) => taskEvents(text).some((event) => event.type === "updated" && event.task?.title === "Bins tonight"));
       const updated = taskEvents(stream.text()).find((event) => event.type === "updated");
-      assert.deepEqual(updated?.task.source, gmailSource);
-      assert.deepEqual(updated?.task.project, { id: projectId, name: "Novus switch" });
-      assert.deepEqual(updated?.task.area, { id: areaId, name: "House" });
+      assert.ok(updated?.task);
+      assert.deepEqual(updated.task.source, gmailSource);
+      assert.deepEqual(updated.task.project, { id: projectId, name: "Novus switch" });
+      assert.deepEqual(updated.task.area, { id: areaId, name: "House" });
 
       const done = await call(fixture.secret, "POST", `/tasks/${id}/complete`, { outcome: "Out front" });
       assert.equal(done.status, 200);
       await stream.readUntil((text) => taskEvents(text).some((event) => event.type === "completed"));
       const completed = taskEvents(stream.text()).find((event) => event.type === "completed");
-      assert.ok(completed);
+      assert.ok(completed?.task);
       assert.equal(completed.task.status, "done");
       assert.equal(completed.task.outcome, "Out front");
       assert.deepEqual(completed.task.source, gmailSource);
@@ -233,7 +236,7 @@ describe("task events", { concurrency: 1 }, () => {
         ["created", "updated"],
       );
       assert.equal(events[1]?.taskId, task.id);
-      assert.equal(events[1]?.task.title, "Shared");
+      assert.equal(events[1]?.task?.title, "Shared");
       assert.equal(events.some((event) => event.taskId === taskBody(away.json).id), false);
     } finally {
       await stream.stop();
@@ -287,6 +290,72 @@ describe("task events", { concurrency: 1 }, () => {
     }
   });
 
+  test("cancel emits cancelled and delete emits deleted", async () => {
+    const fixture = await seed();
+    const stream = await openEvents(fixture.secret, fixture.team.id);
+    try {
+      await stream.readUntil((text) => text.includes("event: ready"));
+      const created = await postTask(fixture.secret, {
+        teamId: fixture.team.id,
+        title: "Duplicate milk",
+        action: "do_now",
+        important: true,
+        urgent: true,
+      });
+      assert.equal(created.status, 201);
+      const task = taskBody(created.json);
+      await stream.readUntil((text) => taskEvents(text).some((event) => event.type === "created" && event.taskId === task.id));
+
+      const cancelled = await call(fixture.secret, "POST", `/tasks/${task.id}/cancel`, { outcome: "bought yesterday" });
+      assert.equal(cancelled.status, 200);
+      await stream.readUntil((text) => taskEvents(text).some((event) => event.type === "cancelled" && event.taskId === task.id));
+      const cancelEvent = taskEvents(stream.text()).find((event) => event.type === "cancelled");
+      assert.ok(cancelEvent?.task);
+      assert.equal(cancelEvent.task.status, "cancelled");
+      assert.equal(cancelEvent.task.outcome, "bought yesterday");
+      assert.equal(cancelEvent.at, cancelEvent.task.updatedAt);
+
+      const again = await postTask(fixture.secret, { teamId: fixture.team.id, title: "Second copy" });
+      assert.equal(again.status, 201);
+      const duplicate = taskBody(again.json);
+      await stream.readUntil((text) => taskEvents(text).some((event) => event.type === "created" && event.taskId === duplicate.id));
+      const removed = await call(fixture.secret, "DELETE", `/tasks/${duplicate.id}`);
+      assert.equal(removed.status, 200);
+      await stream.readUntil((text) => taskEvents(text).some((event) => event.type === "deleted" && event.taskId === duplicate.id));
+      const deleted = taskEvents(stream.text()).find((event) => event.type === "deleted" && event.taskId === duplicate.id);
+      assert.ok(deleted?.task);
+      assert.equal(deleted.task.title, "Second copy");
+      assert.ok(Date.parse(deleted.at) >= Date.parse(deleted.task.updatedAt));
+
+      await handleRemoteNotification(
+        JSON.stringify({
+          origin: taskEventOrigin,
+          type: "deleted",
+          teamId: fixture.team.id,
+          taskId: duplicate.id,
+          at: deleted.at,
+        }),
+      );
+      await handleRemoteNotification(
+        JSON.stringify({
+          origin: "other-process",
+          type: "deleted",
+          teamId: fixture.team.id,
+          taskId: duplicate.id,
+          at: deleted.at,
+        }),
+      );
+      await stream.readUntil(
+        (text) => taskEvents(text).filter((event) => event.type === "deleted" && event.taskId === duplicate.id).length === 2,
+      );
+      const remote = taskEvents(stream.text()).filter((event) => event.type === "deleted" && event.taskId === duplicate.id);
+      assert.equal(remote[1]?.task, null);
+      assert.equal(remote[1]?.at, deleted.at);
+    } finally {
+      await stream.stop();
+    }
+  });
+
   test("MCP points at the SSE URL and does not stream it", async () => {
     const fixture = await seed();
     const listed = await rpc(fixture.secret, "resources/list");
@@ -299,6 +368,9 @@ describe("task events", { concurrency: 1 }, () => {
     assert.match(text, new RegExp(`GET /teams/${fixture.team.id}/events`));
     assert.match(text, /Authorization: Bearer/);
     assert.match(text, /list_tasks/);
+    assert.match(text, /cancelled/);
+    assert.match(text, /deleted/);
+    assert.doesNotMatch(text, /Tasks are not deleted/);
 
     const anon = await rpc(null, "resources/read", { uri: "hearth://task-events" });
     assert.equal(anon.status, 401);
@@ -477,7 +549,7 @@ type TaskEventBody = {
     source: typeof gmailSource | null;
     project: { id: string; name: string } | null;
     area: { id: string; name: string } | null;
-  };
+  } | null;
 };
 
 function parseEvents(text: string) {
@@ -522,7 +594,13 @@ function parseEvents(text: string) {
 
 function taskEvents(text: string): TaskEventBody[] {
   return parseEvents(text)
-    .filter((event) => event.event === "created" || event.event === "updated" || event.event === "completed")
+    .filter((event) =>
+      event.event === "created" ||
+      event.event === "updated" ||
+      event.event === "completed" ||
+      event.event === "cancelled" ||
+      event.event === "deleted",
+    )
     .map((event) => JSON.parse(event.data ?? "") as TaskEventBody);
 }
 

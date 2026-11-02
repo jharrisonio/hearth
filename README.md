@@ -116,6 +116,8 @@ These are the task operations the MCP server binds to. It does not add task fiel
 | `createTask` | `POST /tasks` |
 | `updateTask` | `PATCH /tasks/:id` (rejects `status`; completing is separate) |
 | `completeTask` | `POST /tasks/:id/complete` `{ "outcome": "…" }` |
+| `cancelTask` | `POST /tasks/:id/cancel` `{ "outcome": "…" }` optional; default `"cancelled"` |
+| `deleteTask` | `DELETE /tasks/:id` |
 | `listTasks` | `GET /tasks` |
 | `listDoImmediately` | `GET /tasks/do-immediately` |
 
@@ -143,6 +145,7 @@ A task:
   "createdAt": "2026-11-01T00:00:00.000Z",
   "updatedAt": "2026-11-01T00:00:00.000Z",
   "completedAt": null,
+  "cancelledAt": null,
   "createdBy": { "type": "user", "id": "…" }
 }
 ```
@@ -150,6 +153,10 @@ A task:
 `action` is `do_now`, `delegate`, `schedule`, or `later`. On create, omit `action` to take the suggestion from important × urgent: both true → `do_now`, urgent only → `delegate`, important only → `schedule`, neither → `later`. Sending `action` overrides that suggestion and does not change the two flags.
 
 `waitingOn` is required when `action` is `delegate`. On create, omit `dueAt` for a delegated task and the follow-up is set three days ahead. That date is the nudge. Sending `dueAt: null` stores no follow-up; the task joins the morning queue once it is more than three days old. `outcome` is required when the task is completed.
+
+`status` is `open`, `done`, or `cancelled`. Cancel keeps the row: `POST /tasks/:id/cancel` sets `status` to `cancelled`, `cancelledAt`, and `outcome` (the body may omit it, and the stored value is then `cancelled`). `completedAt` stays null. A cancelled task is out of `status=open` and out of the morning queue. `GET /tasks?status=cancelled` is the audit list; a list with no status filter still includes it. Cancelling a done task is **409** `already_done`. Cancelling again, or completing a cancelled task, is **409** `already_cancelled`.
+
+`DELETE /tasks/:id` removes the row. That is for a mistake or a duplicate. The response is `{ "id": "…", "deleted": true }`. A second delete is **404**. Deleting the task also deletes its idempotency row, so the same `Idempotency-Key` can create a new task. Another team's token gets **403**.
 
 `calendarEventId` is an optional calendar event id. The server keeps `needsCalendar` in line with it: a `schedule` task with no id is stored with `needsCalendar` true, and any id forces `needsCalendar` false. You can omit `needsCalendar`.
 
@@ -172,11 +179,11 @@ Omit `source` on create to store null. On update, omit it to leave the link alon
 
 For Gmail, `href` is the thread URL from the Gmail address bar: `https://mail.google.com/mail/u/0/#all/<threadId>`. Use `/u/1/` (or the matching index) when that mailbox is not the first signed-in account. `#inbox/<threadId>` works the same way. Put the Gmail API message id or the thread id in `externalId` so a bot can find the message again without parsing the URL. `type` stays `email`. Any other page uses `type` `url` and the same `href`.
 
-`create_task` and `update_task` take this same `source`. `list_tasks`, `GET /tasks`, `GET /tasks/do-immediately`, create, update, complete, and the SSE `task` object all include it.
+`create_task` and `update_task` take this same `source`. `list_tasks`, `GET /tasks`, `GET /tasks/do-immediately`, create, update, complete, cancel, delete, and the SSE `task` object all include it. On a `deleted` event from another API process, `task` is null.
 
-`GET /tasks` query: `teamId`, `action`, `status` (`open` or `done`), `important`, `urgent`, `owner` (`user:<uuid>` or `bot:<uuid>`), `dueBefore`, `projectId`, `areaId`, `mine`. `lane` is rejected, and so is the old `project` string. Humans who omit `teamId` get every team they belong to. A bot who omits `teamId` is limited to its token's team. Passing another team returns 403.
+`GET /tasks` query: `teamId`, `action`, `status` (`open`, `done`, or `cancelled`), `important`, `urgent`, `owner` (`user:<uuid>` or `bot:<uuid>`), `dueBefore`, `projectId`, `areaId`, `mine`. `lane` is rejected, and so is the old `project` string. Humans who omit `teamId` get every team they belong to. A bot who omits `teamId` is limited to its token's team. Passing another team returns 403.
 
-`GET /tasks/do-immediately` returns open tasks that are `do_now`, or `schedule` and still need a calendar or have a `dueAt` in the past, or `delegate` with a follow-up at or before now (or no `dueAt` and `createdAt` more than three days ago). Optional `teamId`. Order: important and urgent, then important, then urgent, then the rest; within that, `dueAt` ascending with nulls last; then `updatedAt` descending.
+`GET /tasks/do-immediately` returns open tasks that are `do_now`, or `schedule` and still need a calendar or have a `dueAt` in the past, or `delegate` with a follow-up at or before now (or no `dueAt` and `createdAt` more than three days ago). Done and cancelled tasks stay out. Optional `teamId`. Order: important and urgent, then important, then urgent, then the rest; within that, `dueAt` ascending with nulls last; then `updatedAt` descending.
 
 Other routes humans use from the app: `GET /auth/config`, `POST /auth/dev`, `GET /auth/google`, `GET /auth/me`, `POST /auth/logout`, `GET /teams`, `POST /teams`, `GET /teams/:id`, `GET /teams/:id/events`, `POST /teams/:id/members`, `GET|POST /teams/:id/bots`, `DELETE /teams/:id/bots/:botId`, `GET|POST /teams/:id/projects`, `PATCH /teams/:id/projects/:projectId`, `GET|POST /teams/:id/areas`, `PATCH /teams/:id/areas/:areaId`, `GET|POST /teams/:id/tokens`, `DELETE /teams/:id/tokens/:tokenId`.
 
@@ -208,6 +215,12 @@ curl -sS -b /tmp/hearth.cj -X PATCH -H 'content-type: application/json' \
 curl -sS -b /tmp/hearth.cj -H 'content-type: application/json' \
   -d '{"outcome":"Oat milk is in the fridge"}' \
   http://127.0.0.1:43124/tasks/TASK/complete
+
+curl -sS -b /tmp/hearth.cj -H 'content-type: application/json' \
+  -d '{"outcome":"duplicate"}' \
+  http://127.0.0.1:43124/tasks/TASK/cancel
+
+curl -sS -b /tmp/hearth.cj -X DELETE http://127.0.0.1:43124/tasks/TASK
 
 curl -sS -b /tmp/hearth.cj 'http://127.0.0.1:43124/tasks/do-immediately?teamId=TEAM'
 ```
@@ -244,7 +257,7 @@ Anyone who can see the team can register, including the team bot token. A random
 
 ## Live task events
 
-`GET /teams/:id/events` is a server-sent events stream of task creates, updates, and completions on that team. Auth is the same as the rest of the API: `Authorization: Bearer hth_…` or the `hearth_session` cookie. A bot token only opens its own team. Anyone else gets 403 or 404.
+`GET /teams/:id/events` is a server-sent events stream of task creates, updates, completions, cancellations, and deletes on that team. Auth is the same as the rest of the API: `Authorization: Bearer hth_…` or the `hearth_session` cookie. A bot token only opens its own team. Anyone else gets 403 or 404.
 
 The browser `EventSource` API cannot set an `Authorization` header. A Grok bot should stream the response with `fetch` (or `curl -N`) and send the Bearer token. A signed-in human can use `EventSource` on the web origin, which sends the cookie.
 
@@ -255,7 +268,7 @@ curl -N -H 'authorization: Bearer hth_…' -H 'accept: text/event-stream' \
 
 Through the web proxy that is `http://127.0.0.1:43123/api/teams/TEAM/events`. On Railway, use the public HTTPS origin the same way (`https://<api-host>/teams/TEAM/events` or `https://<web-host>/api/teams/TEAM/events`).
 
-The first message is `event: ready` with `{"teamId":"…"}` and `retry: 3000`. Each change is one message. The event name is `created`, `updated`, or `completed`. The data is JSON:
+The first message is `event: ready` with `{"teamId":"…"}` and `retry: 3000`. Each change is one message. The event name is `created`, `updated`, `completed`, `cancelled`, or `deleted`. The data is JSON:
 
 ```json
 {
@@ -267,7 +280,7 @@ The first message is `event: ready` with `{"teamId":"…"}` and `retry: 3000`. E
 }
 ```
 
-`at` is that write's `updatedAt`. `task` is the same object `GET /tasks` returns, including `source`, so a bot can apply it without a second request. The stream is live only: there is no backlog, and `Last-Event-ID` is not replayed. An idempotent replay of `POST /tasks` does not send another `created`. Tasks are not deleted, so there is no `deleted` event.
+For create, update, complete, and cancel, `at` is that write's `updatedAt`. For delete, `at` is when the row was removed. `task` is the same object `GET /tasks` returns, including `source`, so a bot can apply it without a second request. On `deleted`, the process that removed the row sends that last copy. Another API process sends `task: null`, because the row is already gone; `taskId` is enough to drop it. The stream is live only: there is no backlog, and `Last-Event-ID` is not replayed. An idempotent replay of `POST /tasks` does not send another `created`.
 
 Lines that start with `:` are keepalives, about every 20 seconds. They are not task changes. Access is checked when the stream opens and again on each keepalive.
 
@@ -275,7 +288,7 @@ Railway's public HTTP proxy closes a request after 5 minutes with no bytes, and 
 
 `SSE_HEARTBEAT_MS` (default 20000, clamped to 200–30000) and `SSE_MAX_MS` (default 840000, clamped to 200–840000) override those intervals.
 
-Every API process listens on Postgres. The process that wrote the task sends the event with that row. Other processes send the same type and time with the row they read when the notice arrives. The notice itself is only ids, because Postgres caps a notify payload at 8000 bytes.
+Every API process listens on Postgres. The process that wrote the task sends the event with that row. Other processes send the same type and time with the row they read when the notice arrives. A delete has no row left to read, so those processes send `task: null`. The notice itself is only ids, because Postgres caps a notify payload at 8000 bytes.
 
 The web nginx proxy turns off response buffering for `/api/` and waits up to 15 minutes between chunks, so a bot can subscribe through the web origin. Outbound webhooks are not in this version. A subscription would make the API call a URL a bot supplies, and this stream already covers a bot that can hold a connection.
 
@@ -283,7 +296,7 @@ The web nginx proxy turns off response buffering for `/api/` and waits up to 15 
 
 The API serves a stateless MCP endpoint at `POST /mcp` (Streamable HTTP, JSON responses, no SSE stream). Other methods get 405. Auth is the bot Bearer token, the same `Authorization: Bearer hth_…` header as the REST API. A session cookie is not accepted here.
 
-Tools call the task routes above: `create_task` (pass `idempotencyKey`; it is sent as `Idempotency-Key`; `owner` can be a registered bot; `projectId` and `areaId` link a project or an area; `source` is the email or URL link), `update_task` (null clears a project, area, or source link), `complete_task`, `list_tasks`, and `list_do_immediately`. List filters match `GET /tasks`. Returned tasks include `source`, `project`, and `area`. `create_project`, `list_projects`, `create_area`, and `list_areas` manage the two catalogs. `register_bot`, `list_bots`, and `unregister_bot` manage bot owners. Omit `teamId` on those when the token belongs to one team.
+Tools call the task routes above: `create_task` (pass `idempotencyKey`; it is sent as `Idempotency-Key`; `owner` can be a registered bot; `projectId` and `areaId` link a project or an area; `source` is the email or URL link), `update_task` (null clears a project, area, or source link), `complete_task`, `cancel_task` (optional `outcome`), `delete_task`, `list_tasks`, and `list_do_immediately`. List filters match `GET /tasks`. Returned tasks include `source`, `project`, and `area`. `create_project`, `list_projects`, `create_area`, and `list_areas` manage the two catalogs. `register_bot`, `list_bots`, and `unregister_bot` manage bot owners. Omit `teamId` on those when the token belongs to one team.
 
 `POST /mcp` does not stream task changes. The server instructions and the `hearth://task-events` resource point at `GET /teams/:id/events`. See Live task events above.
 
