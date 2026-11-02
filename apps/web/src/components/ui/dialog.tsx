@@ -12,10 +12,17 @@ export function DialogContent({
   className,
   children,
   variant = "sheet",
+  layer = "base",
   ...props
-}: ComponentProps<typeof DialogPrimitive.Content> & { variant?: "sheet" | "modal" }) {
+}: ComponentProps<typeof DialogPrimitive.Content> & { variant?: "sheet" | "modal"; layer?: "base" | "front" }) {
   const close = (
-    <DialogPrimitive.Close aria-label="Close" className={cn(iconButtonClass, variant === "sheet" ? "fixed right-2.5 top-2.5 z-[60]" : "absolute right-1 top-1")}>
+    <DialogPrimitive.Close
+      aria-label="Close"
+      className={cn(
+        iconButtonClass,
+        variant === "sheet" ? (layer === "front" ? "fixed right-2.5 top-2.5 z-[95]" : "fixed right-2.5 top-2.5 z-[60]") : "absolute right-1 top-1",
+      )}
+    >
       <CloseIcon />
     </DialogPrimitive.Close>
   );
@@ -23,10 +30,10 @@ export function DialogContent({
   if (variant === "modal") {
     return (
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="hearth-pop fixed inset-0 z-[70] bg-black/80 backdrop-blur-[2px]" />
+        <DialogPrimitive.Overlay className="hearth-pop fixed inset-0 z-[100] bg-black/80 backdrop-blur-[2px]" />
         <DialogPrimitive.Content
           className={cn(
-            "hearth-pop fixed left-1/2 top-1/2 z-[80] max-h-[min(640px,calc(100dvh-48px))] w-[min(420px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto border border-[#222] bg-black px-9 pb-9 pt-12 text-white",
+            "hearth-pop fixed left-1/2 top-1/2 z-[110] max-h-[min(640px,calc(100dvh-48px))] w-[min(420px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto border border-[#222] bg-black px-9 pb-9 pt-12 text-white",
             className,
           )}
           {...props}
@@ -40,8 +47,11 @@ export function DialogContent({
 
   return (
     <DialogPrimitive.Portal>
-      <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-black" />
-      <DialogPrimitive.Content className={cn("hearth-sheet fixed inset-0 z-50 overflow-y-auto bg-black text-white", className)} {...props}>
+      <DialogPrimitive.Overlay className={cn("fixed inset-0 bg-black", layer === "front" ? "z-[80]" : "z-40")} />
+      <DialogPrimitive.Content
+        className={cn("hearth-sheet fixed inset-0 overflow-y-auto bg-black text-white", layer === "front" ? "z-[90]" : "z-50", className)}
+        {...props}
+      >
         <div className="mx-auto min-h-dvh w-full max-w-[560px] px-7 pb-20 pt-[92px]">{children}</div>
         {close}
       </DialogPrimitive.Content>

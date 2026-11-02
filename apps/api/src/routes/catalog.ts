@@ -5,7 +5,7 @@ import {
   updateProjectSchema,
 } from "@hearth/shared";
 import type { Context, Hono } from "hono";
-import { createNamed, listNamed, toNamed, updateNamed } from "../catalog.js";
+import { createNamed, listNamed, toNamed, updateNamed, withProjectAreas } from "../catalog.js";
 import { requireTeam, type AppEnv } from "../actor.js";
 import { HttpError, parseBody } from "../errors.js";
 import { readJson, requireUuid } from "../http.js";
@@ -29,8 +29,8 @@ async function list(c: Context<AppEnv>, kind: Kind) {
   await requireTeam(c.get("actor"), teamId);
   const includeArchived = parseFlag(c.req.query("includeArchived"), "includeArchived");
   const rows = await listNamed(kind, teamId, includeArchived);
-  const key = kind === "project" ? "projects" : "areas";
-  return c.json({ [key]: rows.map((row) => toNamed(kind, row)) });
+  if (kind === "project") return c.json({ projects: await withProjectAreas(rows) });
+  return c.json({ areas: rows.map((row) => toNamed("area", row)) });
 }
 
 async function create(c: Context<AppEnv>, kind: Kind) {
@@ -39,7 +39,11 @@ async function create(c: Context<AppEnv>, kind: Kind) {
   const body = parseBody(createSchemas[kind], await readJson(c));
   const notes = kind === "project" ? (body as { notes?: string | null }).notes : undefined;
   const { row, created } = await createNamed(kind, teamId, body.name, notes);
-  return c.json(toNamed(kind, row), created ? 201 : 200);
+  if (kind === "project") {
+    const [project] = await withProjectAreas([row]);
+    return c.json(project, created ? 201 : 200);
+  }
+  return c.json(toNamed("area", row), created ? 201 : 200);
 }
 
 async function update(c: Context<AppEnv>, kind: Kind) {
@@ -54,7 +58,11 @@ async function update(c: Context<AppEnv>, kind: Kind) {
   }
   const body = parseBody(updateSchemas[kind], raw);
   const row = await updateNamed(kind, teamId, id, body);
-  return c.json(toNamed(kind, row));
+  if (kind === "project") {
+    const [project] = await withProjectAreas([row]);
+    return c.json(project);
+  }
+  return c.json(toNamed("area", row));
 }
 
 function teamParam(c: Context<AppEnv>) {

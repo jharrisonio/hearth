@@ -29,6 +29,7 @@ export function toTask(row: TaskRow, names: { projectName: string | null; areaNa
     updatedAt: iso(row.updatedAt) ?? new Date(0).toISOString(),
     completedAt: iso(row.completedAt),
     cancelledAt: iso(row.cancelledAt),
+    sortOrder: row.sortOrder,
     createdBy: { type: row.createdByType, id: row.createdById },
   };
 }

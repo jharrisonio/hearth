@@ -24,26 +24,30 @@ import { fromLocalInput, ownerKey, parseOwnerKey, toLocalInput } from "@/lib/for
 
 export function TaskDialog({
   open,
+  layer = "base",
   teamId,
   task,
   defaultOwnerId,
   defaultAction,
+  onOpenProject,
   onClose,
   onSaved,
   onComplete,
 }: {
   open: boolean;
+  layer?: "base" | "front";
   teamId: string;
   task: Task | null;
   defaultOwnerId: string;
   defaultAction: Action;
+  onOpenProject: (projectId: string) => void;
   onClose: () => void;
   onSaved: () => void;
   onComplete: (task: Task) => void;
 }) {
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent>
+      <DialogContent layer={layer}>
         {open ? (
           <TaskForm
             key={task?.id ?? "new"}
@@ -51,6 +55,7 @@ export function TaskDialog({
             task={task}
             defaultOwnerId={defaultOwnerId}
             defaultAction={defaultAction}
+            onOpenProject={onOpenProject}
             onClose={onClose}
             onSaved={onSaved}
             onComplete={onComplete}
@@ -66,6 +71,7 @@ function TaskForm({
   task,
   defaultOwnerId,
   defaultAction,
+  onOpenProject,
   onClose,
   onSaved,
   onComplete,
@@ -74,6 +80,7 @@ function TaskForm({
   task: Task | null;
   defaultOwnerId: string;
   defaultAction: Action;
+  onOpenProject: (projectId: string) => void;
   onClose: () => void;
   onSaved: () => void;
   onComplete: (task: Task) => void;
@@ -123,6 +130,7 @@ function TaskForm({
             teamId,
             name: current.name,
             notes: null,
+            area: null,
             archivedAt: new Date(0).toISOString(),
             createdAt: current.id,
             updatedAt: current.id,
@@ -340,13 +348,11 @@ function TaskForm({
         </select>
       </label>
       <div className="grid grid-cols-1 gap-x-6 sm:grid-cols-2">
-        <LinkField
-          label="Project"
-          hint="A multi-step outcome. Open Projects for the other steps. Future ones stay Later."
-          placeholder="e.g. Tara AU returns"
+        <ProjectField
           value={projectId}
           options={projects}
           onChange={setProjectId}
+          onOpen={onOpenProject}
           onCreate={(name) =>
             createLink(name, (next) => api.createProject(teamId, { name: next }), setProjects, setProjectId, setError)
           }
@@ -491,6 +497,134 @@ async function createLink<T extends { id: string; name: string }>(
     setError(err instanceof ApiError ? err.message : "Could not add that.");
     throw err;
   }
+}
+
+function ProjectField({
+  value,
+  options,
+  onChange,
+  onOpen,
+  onCreate,
+}: {
+  value: string;
+  options: ProjectSummary[];
+  onChange: (id: string) => void;
+  onOpen: (projectId: string) => void;
+  onCreate: (name: string) => Promise<void>;
+}) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const selected = options.find((option) => option.id === value) ?? null;
+  const needle = query.trim().toLowerCase();
+  const matches = options
+    .filter((option) => !needle || option.name.toLowerCase().includes(needle))
+    .slice(0, 8);
+  const exact = needle.length > 0 && options.some((option) => option.name.toLowerCase() === needle);
+
+  async function add() {
+    const name = query.trim();
+    if (!name || exact) return;
+    setAdding(true);
+    try {
+      await onCreate(name);
+      setQuery("");
+      setOpen(false);
+    } catch {
+      // The form already shows the error.
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  return (
+    <div>
+      <span className={labelClass}>Project</span>
+      {selected ? (
+        <div className="flex items-baseline justify-between gap-4">
+          <button
+            type="button"
+            onClick={() => onOpen(selected.id)}
+            className="min-w-0 truncate text-left text-[15px] font-light text-[#eee] underline decoration-[#333] underline-offset-[5px] transition-colors duration-150 hover:decoration-white"
+          >
+            {selected.name}
+          </button>
+          <button
+            type="button"
+            onClick={() => onChange("")}
+            className="shrink-0 text-[10px] font-normal uppercase tracking-[0.28em] text-[#8a8a8a] hover:text-white"
+          >
+            Clear
+          </button>
+        </div>
+      ) : null}
+      <input
+        className={fieldClass}
+        value={query}
+        placeholder={selected ? "Change project" : "Search projects"}
+        aria-label="Search projects"
+        aria-autocomplete="list"
+        aria-expanded={open}
+        role="combobox"
+        onFocus={() => setOpen(true)}
+        onChange={(event) => {
+          setQuery(event.target.value);
+          setOpen(true);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            if (matches.length === 1 && matches[0]) {
+              onChange(matches[0].id);
+              setQuery("");
+              setOpen(false);
+              return;
+            }
+            void add();
+          }
+          if (event.key === "Escape") setOpen(false);
+        }}
+      />
+      {open ? (
+        <ul className="mt-1 border-b border-[#1c1c1c]" role="listbox">
+          {matches.map((option) => (
+            <li key={option.id}>
+              <button
+                type="button"
+                role="option"
+                aria-selected={option.id === value}
+                className="block w-full py-2.5 text-left text-[15px] font-light text-[#ccc] transition-colors duration-150 hover:text-white"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  onChange(option.id);
+                  setQuery("");
+                  setOpen(false);
+                }}
+              >
+                {option.name}
+                {option.archivedAt ? <span className="ml-3 text-[10px] uppercase tracking-[0.28em] text-[#555]">Archived</span> : null}
+              </button>
+            </li>
+          ))}
+          {needle && !exact ? (
+            <li>
+              <button
+                type="button"
+                className="block w-full py-2.5 text-left text-[15px] font-light text-[#8a8a8a] transition-colors duration-150 hover:text-white"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => void add()}
+                disabled={adding}
+              >
+                {adding ? "Adding…" : `Add ${query.trim()}`}
+              </button>
+            </li>
+          ) : null}
+          {matches.length === 0 && !needle ? <li className="py-2.5 text-[13px] text-[#666]">No projects yet.</li> : null}
+        </ul>
+      ) : null}
+      <p className={hintClass}>Search by name. The name opens that project.</p>
+    </div>
+  );
 }
 
 function LinkField({

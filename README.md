@@ -146,6 +146,7 @@ A task:
   "updatedAt": "2026-11-01T00:00:00.000Z",
   "completedAt": null,
   "cancelledAt": null,
+  "sortOrder": null,
   "createdBy": { "type": "user", "id": "…" }
 }
 ```
@@ -162,7 +163,7 @@ A task:
 
 `project` and `area` are `{ "id", "name" }` or null. A project is a multi-step outcome. An area is a life or work domain, such as House or Finance. They are separate. Set them with `projectId` and `areaId` (a uuid on that team, or null to clear). Omit either on update to leave it unchanged. The old free-text `project` string is rejected.
 
-On a project, each task is one step. `do_now`, `delegate`, and `schedule` are active next actions. Several may be open on the same project; the API does not reject that. Future or dependent steps are tasks with `action` `later`. Create one task per step and set `action` explicitly when the important × urgent suggestion is not the step you want. `later` stays out of `GET /tasks/do-immediately` until the action changes. Project `notes` hold the natural-planning sketch (purpose, outcome, sequence). The step list is the tasks, not the notes.
+On a project, each task is one step. `do_now`, `delegate`, and `schedule` are active next actions. Several may be open on the same project; the API does not reject that. Future or dependent steps are tasks with `action` `later`. Create one task per step and set `action` explicitly when the important × urgent suggestion is not the step you want. `later` stays out of `GET /tasks/do-immediately` until the action changes. `sortOrder` is an optional integer (0 or greater) for the order of a step inside its active list or its later list. Omit it and the step sorts after numbered ones. Project `notes` are the support plan (purpose, sequence, constraints), not the step list. `area` on a project is `{ "id", "name" }` or null. Set it with `areaId`.
 
 `source` is an optional link back to where the task came from. It is `null`, or:
 
@@ -189,7 +190,7 @@ For Gmail, `href` is the thread URL from the Gmail address bar: `https://mail.go
 
 Other routes humans use from the app: `GET /auth/config`, `POST /auth/dev`, `GET /auth/google`, `GET /auth/me`, `POST /auth/logout`, `GET /teams`, `POST /teams`, `GET /teams/:id`, `GET /teams/:id/events`, `POST /teams/:id/members`, `GET|POST /teams/:id/bots`, `DELETE /teams/:id/bots/:botId`, `GET|POST /teams/:id/projects`, `PATCH /teams/:id/projects/:projectId`, `GET|POST /teams/:id/areas`, `PATCH /teams/:id/areas/:areaId`, `GET|POST /teams/:id/tokens`, `DELETE /teams/:id/tokens/:tokenId`.
 
-`POST` for an area takes `{ "name": "…" }`. `POST` for a project takes `{ "name": "…", "notes": "…" }`. `notes` is optional, at most 5000 characters, and null when omitted. The same name on that team returns the existing row (200) and restores it if it was archived. Sending `notes` on that call replaces the stored notes; omit `notes` to leave them. A new row is 201. `PATCH` for an area takes `name` and/or `archived`. `PATCH` for a project also takes `notes` (`null` clears it). `GET` omits archived rows unless `includeArchived=true`. A project in the list looks like `{ "id", "teamId", "name", "notes", "archivedAt", "createdAt", "updatedAt" }`. An area has the same fields without `notes`. Archived links stay on tasks until cleared.
+`POST` for an area takes `{ "name": "…" }`. `POST` for a project takes `{ "name": "…", "notes": "…" }`. `notes` is optional, at most 5000 characters, and null when omitted. The same name on that team returns the existing row (200) and restores it if it was archived. Sending `notes` on that call replaces the stored notes; omit `notes` to leave them. A new row is 201. `PATCH` for an area takes `name` and/or `archived`. `PATCH` for a project also takes `notes` (`null` clears it), `areaId` (a uuid on that team, or `null` to clear), and `archived`. Setting `archived` to true completes the project. It is rejected with `409` `project_open_tasks` while any task on that project is still `open`. Complete or cancel those tasks first. The row is not deleted. `GET` omits archived rows unless `includeArchived=true`. A project in the list looks like `{ "id", "teamId", "name", "notes", "area", "archivedAt", "createdAt", "updatedAt" }`. An area has the same fields without `notes` and `area`. Archived links stay on tasks until cleared.
 
 The API does not cap how many active steps a project has. Prefer `later` for steps that are not a current front; that is guidance, not a check.
 
@@ -300,7 +301,7 @@ The web nginx proxy turns off response buffering for `/api/` and waits up to 15 
 
 The API serves a stateless MCP endpoint at `POST /mcp` (Streamable HTTP, JSON responses, no SSE stream). Other methods get 405. Auth is the bot Bearer token, the same `Authorization: Bearer hth_…` header as the REST API. A session cookie is not accepted here.
 
-Tools call the task routes above: `create_task` (one step per call; pass `idempotencyKey`; it is sent as `Idempotency-Key`; `owner` can be a registered bot; `projectId` and `areaId` link a project or an area; set `action` to `later` for a future project step, or `do_now`, `delegate`, or `schedule` for an active front; `source` is the email or URL link), `update_task` (change `action` to bring a later step forward or park an active one; null clears a project, area, or source link), `complete_task`, `cancel_task` (optional `outcome`), `delete_task`, `list_tasks` (filter `projectId` and `action` to separate active steps from later ones), and `list_do_immediately` (excludes `later`, done, and cancelled). List filters match `GET /tasks`. Returned tasks include `action`, `source`, `project`, and `area`. `create_project` and `update_project` take optional `notes`. `list_projects` returns them. `create_area` and `list_areas` manage areas. `register_bot`, `list_bots`, and `unregister_bot` manage bot owners. Omit `teamId` on those when the token belongs to one team.
+Tools call the task routes above: `create_task` (one step per call; pass `idempotencyKey`; it is sent as `Idempotency-Key`; `owner` can be a registered bot; `projectId` and `areaId` link a project or an area; set `action` to `later` for a future project step, or `do_now`, `delegate`, or `schedule` for an active front; `source` is the email or URL link), `update_task` (change `action` to bring a later step forward or park an active one; null clears a project, area, or source link), `complete_task`, `cancel_task` (optional `outcome`), `delete_task`, `list_tasks` (filter `projectId` and `action` to separate active steps from later ones), and `list_do_immediately` (excludes `later`, done, and cancelled). List filters match `GET /tasks`. Returned tasks include `action`, `source`, `project`, `area`, and `sortOrder`. `create_project` and `update_project` take optional `notes`. `update_project` also takes `areaId` and `archived`. Archiving is rejected while any step is still open. `list_projects` returns `notes` and `area`. `create_area` and `list_areas` manage areas. `register_bot`, `list_bots`, and `unregister_bot` manage bot owners. Omit `teamId` on those when the token belongs to one team.
 
 `POST /mcp` does not stream task changes. The server instructions and the `hearth://task-events` resource point at `GET /teams/:id/events`. See Live task events above.
 
@@ -344,7 +345,7 @@ Schema changes need a new SQL file under `apps/api/drizzle` and a matching entry
 
 `0005_projects.sql` copies each non-empty `tasks.project` string into a team-scoped project and sets `project_id`, then drops the text column. Strings that are area names (House, Home, Finance, Work, Kitchen, Shed, Admin, Errands, Personal, Health, Family, Career, any case) are left unlinked. Areas are not invented from those strings.
 
-`0006_cancel.sql` adds `cancelled` to task status and `cancelled_at`. `0007_project_notes.sql` adds nullable `projects.notes` (at most 5000 characters) for the natural-planning sketch. It does not move tasks.
+`0006_cancel.sql` adds `cancelled` to task status and `cancelled_at`. `0007_project_notes.sql` adds nullable `projects.notes` (at most 5000 characters) for the support plan. `0008_project_detail.sql` adds `projects.area_id` and `tasks.sort_order`. Neither moves tasks.
 
 ## Not in v1
 

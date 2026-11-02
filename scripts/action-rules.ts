@@ -185,6 +185,13 @@ function checkMigrationSql() {
   assert(journal.includes("0005_projects"), "journal lists the projects migration");
   assert(journal.includes("0006_cancel"), "journal lists the cancel migration");
   assert(journal.includes("0007_project_notes"), "journal lists the project notes migration");
+  assert(journal.includes("0008_project_detail"), "journal lists the project detail migration");
+  const detailSql = readFileSync(new URL("../apps/api/drizzle/0008_project_detail.sql", import.meta.url), "utf8");
+  assert(detailSql.includes('ADD COLUMN "area_id"'), "projects gain an area");
+  assert(detailSql.includes('ADD COLUMN "sort_order"'), "tasks gain a step order");
+  assert(updateProjectSchema.parse({ areaId: null }).areaId === null, "project area can be cleared");
+  assert(updateTaskSchema.parse({ sortOrder: 2 }).sortOrder === 2, "step order is a number");
+  assert(!updateTaskSchema.safeParse({ sortOrder: -1 }).success, "step order cannot be negative");
   const notesSql = readFileSync(new URL("../apps/api/drizzle/0007_project_notes.sql", import.meta.url), "utf8");
   assert(notesSql.includes('ADD COLUMN "notes" text'), "projects gain a notes column");
   assert(notesSql.includes("char_length(\"notes\") <= 5000"), "project notes are capped");

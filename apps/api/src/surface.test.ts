@@ -48,6 +48,8 @@ describe("task surface", { concurrency: 1 }, () => {
       assert.equal(has("areas", column), true, `areas.${column}`);
     }
     assert.equal(has("projects", "notes"), true);
+    assert.equal(has("projects", "area_id"), true);
+    assert.equal(has("tasks", "sort_order"), true);
     assert.equal(has("areas", "notes"), false);
   });
 
@@ -533,6 +535,7 @@ describe("task surface", { concurrency: 1 }, () => {
     const project = namedBody(created.json);
     assert.equal(project.name, "Novus switch");
     assert.equal(project.notes, null);
+    assert.equal((created.json as { area: unknown }).area, null);
     const again = await call(fixture.secret, "POST", `/teams/${fixture.team.id}/projects`, { name: "novus switch" });
     assert.equal(again.status, 200);
     assert.equal(namedBody(again.json).id, project.id);
@@ -543,6 +546,7 @@ describe("task surface", { concurrency: 1 }, () => {
     assert.equal(areaResponse.status, 201);
     const area = namedBody(areaResponse.json);
     assert.equal("notes" in (areaResponse.json as object), false);
+    assert.equal("area" in (areaResponse.json as object), false);
     const areaNotes = await call(fixture.secret, "POST", `/teams/${fixture.team.id}/areas`, { name: "Garden", notes: "nope" });
     assert.equal(areaNotes.status, 400);
     const clash = await call(fixture.secret, "PATCH", `/teams/${fixture.team.id}/projects/${project.id}`, {
@@ -622,9 +626,51 @@ describe("task surface", { concurrency: 1 }, () => {
     assert.equal(listed.status, 200);
     assert.deepEqual((listed.json as { tasks: { id: string }[] }).tasks.map((row) => row.id), [body.id]);
 
+    const ordered = await call(fixture.secret, "PATCH", `/tasks/${body.id}`, { sortOrder: 3 });
+    assert.equal(ordered.status, 200);
+    assert.equal((ordered.json as { sortOrder: number | null }).sortOrder, 3);
+    const negative = await call(fixture.secret, "PATCH", `/tasks/${body.id}`, { sortOrder: -1 });
+    assert.equal(negative.status, 400);
+
+    const withArea = await call(fixture.secret, "PATCH", `/teams/${fixture.team.id}/projects/${project.id}`, {
+      areaId: area.id,
+    });
+    assert.equal(withArea.status, 200);
+    assert.deepEqual((withArea.json as { area: { id: string; name: string } | null }).area, {
+      id: area.id,
+      name: "House",
+    });
+    const badArea = await call(fixture.secret, "PATCH", `/teams/${fixture.team.id}/projects/${project.id}`, {
+      areaId: "00000000-0000-4000-8000-000000000099",
+    });
+    assert.equal(badArea.status, 400);
+    assert.equal(errorBody(badArea.json).code, "invalid_area");
+    const clearedArea = await call(fixture.secret, "PATCH", `/teams/${fixture.team.id}/projects/${project.id}`, {
+      areaId: null,
+    });
+    assert.equal(clearedArea.status, 200);
+    assert.equal((clearedArea.json as { area: unknown }).area, null);
+
     const oldFilter = await call(fixture.secret, "GET", "/tasks?project=Novus%20switch");
     assert.equal(oldFilter.status, 400);
     assert.equal(errorBody(oldFilter.json).code, "invalid_query");
+
+    const blockedArchive = await call(fixture.secret, "PATCH", `/teams/${fixture.team.id}/projects/${project.id}`, {
+      archived: true,
+    });
+    assert.equal(blockedArchive.status, 409);
+    assert.equal(errorBody(blockedArchive.json).code, "project_open_tasks");
+    const stillOpen = await call(fixture.secret, "GET", `/teams/${fixture.team.id}/projects`);
+    assert.equal(
+      (stillOpen.json as { projects: { id: string; archivedAt: string | null }[] }).projects.some(
+        (row) => row.id === project.id && row.archivedAt === null,
+      ),
+      true,
+    );
+    for (const id of [body.id, taskBody(front.json).id, taskBody(secondFront.json).id]) {
+      const dropped = await call(fixture.secret, "POST", `/tasks/${id}/cancel`, {});
+      assert.equal(dropped.status, 200);
+    }
 
     const archived = await call(fixture.secret, "PATCH", `/teams/${fixture.team.id}/projects/${project.id}`, {
       archived: true,

@@ -1,5 +1,5 @@
 import type { TaskSource } from "@hearth/shared";
-import { boolean, index, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
+import { boolean, index, integer, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 
 export const teamKind = pgEnum("team_kind", ["personal", "household"]);
 export const membershipRole = pgEnum("membership_role", ["owner", "member"]);
@@ -71,11 +71,13 @@ export const projects = pgTable(
     name: text("name").notNull(),
     /** Natural-planning notes. The steps are tasks linked to this project. */
     notes: text("notes"),
+    /** Life or work domain this outcome sits in. Not a step. */
+    areaId: uuid("area_id").references(() => areas.id, { onDelete: "set null" }),
     archivedAt: timestamp("archived_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [index("projects_team_idx").on(table.teamId)],
+  (table) => [index("projects_team_idx").on(table.teamId), index("projects_area_id_idx").on(table.areaId)],
 );
 
 /** A life or work domain, scoped to one team. Not a project. */
@@ -129,6 +131,8 @@ export const tasks = pgTable(
     needsCalendar: boolean("needs_calendar").notNull().default(false),
     projectId: uuid("project_id").references(() => projects.id, { onDelete: "set null" }),
     areaId: uuid("area_id").references(() => areas.id, { onDelete: "set null" }),
+    /** Order of a step inside its project list. Null sorts after numbered steps. */
+    sortOrder: integer("sort_order"),
     /** Email or page this task came from. Null when the task has no link. */
     source: jsonb("source").$type<TaskSource | null>(),
     dueAt: timestamp("due_at", { withTimezone: true }),

@@ -233,7 +233,7 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "update_project",
     {
       description:
-        "Update a project (PATCH /teams/:id/projects/:id). Change name, notes, or archived. Null notes clears the plan. Steps stay tasks. Omit teamId when this token belongs to one team.",
+        "Update a project (PATCH /teams/:id/projects/:id). Change name, notes, areaId, or archived. Null notes clears the plan. Null areaId clears the area. archived true completes the project and is rejected while any task on it is still open. Steps stay tasks. Omit teamId when this token belongs to one team.",
       inputSchema: updateProjectToolSchema,
     },
     async ({ id, teamId, ...patch }) => {
@@ -252,7 +252,7 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "list_projects",
     {
       description:
-        "List projects (GET /teams/:id/projects), each with notes. A project is a multi-step outcome; its steps are tasks. Archived projects are omitted unless includeArchived is true. Omit teamId when this token belongs to one team.",
+        "List projects (GET /teams/:id/projects), each with notes and area. A project is a multi-step outcome; its steps are tasks. Archived projects are omitted unless includeArchived is true. Omit teamId when this token belongs to one team.",
       inputSchema: listNamedToolSchema,
     },
     async (query) => {
