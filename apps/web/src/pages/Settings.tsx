@@ -1,10 +1,9 @@
-import type { BotTokenSummary, Member, TeamSummary } from "@hearth/shared";
+import type { AuthConfig, BotTokenSummary, Member, TeamSummary } from "@hearth/shared";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { useAuth } from "@/auth";
 import { CloseIcon } from "@/components/Icons";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { ApiError, api } from "@/lib/api";
 import { fieldClass } from "@/lib/field";
 
@@ -23,7 +22,7 @@ export function Settings() {
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [confirmRevoke, setConfirmRevoke] = useState<string | null>(null);
-  const [creatingHousehold, setCreatingHousehold] = useState(false);
+  const [config, setConfig] = useState<AuthConfig | null>(null);
 
   async function load(id: string) {
     setError(null);
@@ -65,6 +64,10 @@ export function Settings() {
   useEffect(() => {
     if (teamId) void load(teamId);
   }, [teamId]);
+
+  useEffect(() => {
+    void api.config().then(setConfig).catch(() => setConfig(null));
+  }, []);
   const isOwner = team?.role === "owner";
   const labelClass = "text-[11px] uppercase tracking-[0.16em] text-white/40";
 
@@ -115,39 +118,38 @@ export function Settings() {
       </Link>
       <main className="mx-auto max-w-md px-8 pb-24 pt-24">
         {loading ? <p className="text-[13px] text-white/40">Loading…</p> : null}
-        {team ? (
-          <>
-            <p className={labelClass}>
-              {team.kind === "personal" ? "Personal" : "Household"} / {team.role === "owner" ? "Owner" : "Member"}
-            </p>
-            <h1 className="mt-3 text-[15px]">{team.name}</h1>
-            <p className="mt-2 text-[13px] text-white/40">Signed in as {user?.name}.</p>
-            {teams.length > 1 ? (
-              <ul className="mt-6 flex flex-wrap gap-x-4 gap-y-2 text-[13px]">
-                {teams.map((item) => (
-                  <li key={item.id}>
-                    <Link
-                      to={`/teams/${item.id}`}
-                      className={item.id === team.id ? "text-white" : "text-white/35 hover:text-white"}
-                      aria-current={item.id === team.id ? "true" : undefined}
-                    >
-                      {item.name}
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-            <button type="button" className="mt-6 text-[13px] text-white/50 hover:text-white" onClick={() => setCreatingHousehold(true)}>
-              New household
+        {error ? <p className="text-[13px] text-white/70">{error}</p> : null}
+        {notice ? <p className="mt-4 text-[13px] text-white/70">{notice}</p> : null}
+
+        <section>
+          <h2 className={labelClass}>Global</h2>
+          <h3 className="mt-8 text-[15px]">Google account</h3>
+          <p className="mt-4 text-[15px]">{user?.name}</p>
+          <p className="mt-1 text-[13px] text-white/45">{user?.email}</p>
+          {config?.google ? (
+            <button
+              type="button"
+              className="mt-6 text-[13px] text-white/70 hover:text-white"
+              onClick={() => (window.location.href = "/api/auth/google")}
+            >
+              Connect Google
             </button>
-          </>
-        ) : null}
-        {error ? <p className="mt-6 text-[13px] text-white/70">{error}</p> : null}
-        {notice ? <p className="mt-6 text-[13px] text-white/70">{notice}</p> : null}
+          ) : (
+            <p className="mt-6 text-[13px] text-white/40">Google sign-in is off.</p>
+          )}
+          <button type="button" className="mt-4 block text-[13px] text-white/45 hover:text-white" onClick={() => void signOut()}>
+            Sign out
+          </button>
+        </section>
 
         {team ? (
           <section className="mt-16">
-            <h2 className={labelClass}>People</h2>
+            <h2 className={labelClass}>Current list</h2>
+            <h3 className="mt-8 text-[15px]">{team.name}</h3>
+            <p className="mt-2 text-[13px] text-white/40">
+              {team.kind === "personal" ? "Personal" : "Household"} / {team.role === "owner" ? "Owner" : "Member"}
+            </p>
+            <h4 className={`mt-10 ${labelClass}`}>Members</h4>
             <p className="mt-3 text-[13px] text-white/45">
               {team.kind === "personal"
                 ? "A personal list stays with you. Bots you grant can still post here."
@@ -177,12 +179,7 @@ export function Settings() {
                 <Button type="submit">Add member</Button>
               </form>
             ) : null}
-          </section>
-        ) : null}
-
-        {team ? (
-          <section className="mt-16">
-            <h2 className={labelClass}>Bot tokens</h2>
+            <h4 className={`mt-12 ${labelClass}`}>Bot tokens</h4>
             <p className="mt-3 text-[13px] text-white/45">
               A token is scoped to this team. Send it as <code>Authorization: Bearer …</code>. The secret is shown once.
             </p>
@@ -241,74 +238,7 @@ export function Settings() {
             )}
           </section>
         ) : null}
-
-        <button type="button" className="mt-16 text-[13px] text-white/45 hover:text-white" onClick={() => void signOut()}>
-          Sign out
-        </button>
       </main>
-      <HouseholdDialog
-        open={creatingHousehold}
-        onClose={() => setCreatingHousehold(false)}
-        onCreated={(created) => {
-          setTeams((current) => [...current, created]);
-          navigate(`/teams/${created.id}`);
-        }}
-      />
     </div>
-  );
-}
-
-function HouseholdDialog({
-  open,
-  onClose,
-  onCreated,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onCreated: (team: TeamSummary) => void;
-}) {
-  const [name, setName] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  async function onSubmit(event: React.FormEvent) {
-    event.preventDefault();
-    if (!name.trim()) return;
-    setSaving(true);
-    setError(null);
-    try {
-      const created = await api.createTeam(name.trim());
-      setName("");
-      onCreated(created);
-      onClose();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not create the household.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent>
-        <form onSubmit={(event) => void onSubmit(event)}>
-          <DialogTitle>Household</DialogTitle>
-          <DialogDescription>You become the owner. Invite people from the team after they have signed in once.</DialogDescription>
-          <label className="mt-6 block text-[11px] uppercase tracking-[0.16em] text-white/45">
-            Name
-            <input className={fieldClass} value={name} onChange={(event) => setName(event.target.value)} required />
-          </label>
-          {error ? <p className="mt-4 text-[13px] text-white/70">{error}</p> : null}
-          <div className="mt-8 flex justify-end gap-5">
-            <Button type="button" variant="ghost" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={saving}>
-              {saving ? "Creating…" : "Create"}
-            </Button>
-          </div>
-        </form>
-      </DialogContent>
-    </Dialog>
   );
 }

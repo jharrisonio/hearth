@@ -1,8 +1,8 @@
 import type {
+  Action,
   AuthConfig,
   BotTokenSummary,
   CurrentUser,
-  Lane,
   Member,
   Task,
   TaskList,
@@ -36,7 +36,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export type TaskQuery = {
   teamId?: string;
-  lane?: Lane;
+  action?: Action;
   status?: TaskStatus;
   important?: boolean;
   urgent?: boolean;

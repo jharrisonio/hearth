@@ -1,11 +1,14 @@
 import {
+  actions,
   completeTaskSchema,
   createTaskSchema,
-  lanes,
+  followUpFrom,
+  resolveNeedsCalendar,
+  suggestAction,
   taskStatuses,
   updateTaskSchema,
+  type Action,
   type ActorRef,
-  type Lane,
   type Task,
   type TaskStatus,
 } from "@hearth/shared";
@@ -46,7 +49,7 @@ taskRoutes.get("/do-immediately", async (c) => {
   const rows = await db
     .select()
     .from(tasks)
-    .where(and(inArray(tasks.teamId, ids), eq(tasks.status, "open"), eq(tasks.lane, "next")))
+    .where(and(inArray(tasks.teamId, ids), eq(tasks.status, "open"), morningQueueFilter()))
     .orderBy(
       sql`CASE WHEN ${tasks.important} AND ${tasks.urgent} THEN 0 WHEN ${tasks.important} THEN 1 WHEN ${tasks.urgent} THEN 2 ELSE 3 END`,
       sql`${tasks.dueAt} ASC NULLS LAST`,
@@ -59,17 +62,20 @@ taskRoutes.get("/do-immediately", async (c) => {
 taskRoutes.get("/", async (c) => {
   const actor = c.get("actor");
   const query = c.req.query();
+  if (query.lane !== undefined) {
+    throw new HttpError(400, "invalid_query", "lane has been removed. Filter with action.");
+  }
   const teamId = optionalUuid(query.teamId, "teamId");
   const ids = await teamIdsFor(actor, teamId);
   if (ids.length === 0) return c.json({ tasks: [] });
 
   const filters: SQL[] = [inArray(tasks.teamId, ids)];
-  const lane = parseLane(query.lane);
+  const action = parseAction(query.action);
   const status = parseStatus(query.status);
   const important = parseBool(query.important, "important");
   const urgent = parseBool(query.urgent, "urgent");
   const mine = parseBool(query.mine, "mine");
-  if (lane) filters.push(eq(tasks.lane, lane));
+  if (action) filters.push(eq(tasks.action, action));
   if (status) filters.push(eq(tasks.status, status));
   if (important !== undefined) filters.push(eq(tasks.important, important));
   if (urgent !== undefined) filters.push(eq(tasks.urgent, urgent));
@@ -108,12 +114,17 @@ taskRoutes.post("/", async (c) => {
   const actor = c.get("actor");
   const body = parseBody(createTaskSchema, await readJson(c));
   await requireTeam(actor, body.teamId);
-  const lane = body.lane ?? "next";
-  const waitingOn = lane === "waiting" ? blankToNull(body.waitingOn) ?? null : null;
-  assertWaiting(lane, waitingOn);
+  const important = body.important ?? false;
+  const urgent = body.urgent ?? false;
+  const action = body.action ?? suggestAction(important, urgent);
+  const waitingOn = action === "delegate" ? blankToNull(body.waitingOn) ?? null : null;
+  assertDelegate(action, waitingOn);
+  const calendarEventId = blankToNull(body.calendarEventId) ?? null;
+  const needsCalendar = resolveNeedsCalendar(action, calendarEventId, body.needsCalendar, null);
   const owner = body.owner ?? actorRef(actor);
   await assertOwnerOnTeam(body.teamId, owner);
   const now = new Date();
+  const dueAt = action === "delegate" && body.dueAt === undefined ? followUpFrom(now) : parseDue(body.dueAt);
   const [row] = await db
     .insert(tasks)
     .values({
@@ -122,12 +133,14 @@ taskRoutes.post("/", async (c) => {
       detail: blankToNull(body.detail) ?? null,
       ownerType: owner.type,
       ownerId: owner.id,
-      important: body.important ?? false,
-      urgent: body.urgent ?? false,
-      lane,
+      important,
+      urgent,
+      action,
       waitingOn,
+      calendarEventId,
+      needsCalendar,
       project: blankToNull(body.project) ?? null,
-      dueAt: parseDue(body.dueAt),
+      dueAt,
       createdAt: now,
       updatedAt: now,
       createdByType: actor.type,
@@ -164,16 +177,21 @@ taskRoutes.patch("/:id", async (c) => {
   const existing = await loadTask(id);
   await requireTeam(c.get("actor"), existing.teamId);
 
-  const lane = body.lane ?? existing.lane;
+  const action = body.action ?? existing.action;
   const waitingOn =
-    lane === "waiting"
+    action === "delegate"
       ? body.waitingOn !== undefined
         ? blankToNull(body.waitingOn) ?? null
         : existing.waitingOn
       : null;
-  assertWaiting(lane, waitingOn);
-  const owner: ActorRef =
-    body.owner ?? { type: existing.ownerType, id: existing.ownerId };
+  assertDelegate(action, waitingOn);
+  const calendarEventId =
+    body.calendarEventId !== undefined ? blankToNull(body.calendarEventId) ?? null : existing.calendarEventId;
+  const needsCalendar = resolveNeedsCalendar(action, calendarEventId, body.needsCalendar, {
+    action: existing.action,
+    needsCalendar: existing.needsCalendar,
+  });
+  const owner: ActorRef = body.owner ?? { type: existing.ownerType, id: existing.ownerId };
   if (body.owner) await assertOwnerOnTeam(existing.teamId, owner);
 
   const [row] = await db
@@ -185,8 +203,10 @@ taskRoutes.patch("/:id", async (c) => {
       ownerId: owner.id,
       important: body.important ?? existing.important,
       urgent: body.urgent ?? existing.urgent,
-      lane,
+      action,
       waitingOn,
+      calendarEventId,
+      needsCalendar,
       project: body.project !== undefined ? blankToNull(body.project) ?? null : existing.project,
       dueAt: body.dueAt !== undefined ? parseDue(body.dueAt) : existing.dueAt,
       updatedAt: new Date(),
@@ -227,10 +247,31 @@ async function loadTask(id: string) {
   return row;
 }
 
-function assertWaiting(lane: Lane, waitingOn: string | null) {
-  if (lane === "waiting" && !waitingOn) {
-    throw new HttpError(400, "waiting_on_required", "Waiting tasks need waitingOn.");
+function assertDelegate(action: Action, waitingOn: string | null) {
+  if (action === "delegate" && !waitingOn) {
+    throw new HttpError(400, "waiting_on_required", "Delegated tasks need waitingOn.");
   }
+}
+
+/** Same membership as `inMorningQueue` in @hearth/shared. Schedule is strictly past; delegate includes due now. */
+function morningQueueFilter() {
+  return sql`(
+    ${tasks.action} = 'do_now'
+    OR (
+      ${tasks.action} = 'schedule'
+      AND (
+        ${tasks.needsCalendar}
+        OR (${tasks.dueAt} IS NOT NULL AND ${tasks.dueAt} < now())
+      )
+    )
+    OR (
+      ${tasks.action} = 'delegate'
+      AND (
+        (${tasks.dueAt} IS NOT NULL AND ${tasks.dueAt} <= now())
+        OR (${tasks.dueAt} IS NULL AND ${tasks.createdAt} < now() - interval '3 days')
+      )
+    )
+  )`;
 }
 
 function parseDue(value: string | null | undefined): Date | null {
@@ -252,8 +293,10 @@ function toTask(row: typeof tasks.$inferSelect): Task {
     owner: { type: row.ownerType, id: row.ownerId },
     important: row.important,
     urgent: row.urgent,
-    lane: row.lane,
+    action: row.action,
     waitingOn: row.waitingOn,
+    calendarEventId: row.calendarEventId,
+    needsCalendar: row.needsCalendar,
     project: row.project,
     dueAt: iso(row.dueAt),
     outcome: row.outcome,
@@ -277,10 +320,10 @@ function parseBool(value: string | undefined, name: string): boolean | undefined
   throw new HttpError(400, "invalid_query", `${name} must be true or false.`);
 }
 
-function parseLane(value: string | undefined): Lane | undefined {
+function parseAction(value: string | undefined): Action | undefined {
   if (value === undefined) return undefined;
-  if ((lanes as readonly string[]).includes(value)) return value as Lane;
-  throw new HttpError(400, "invalid_query", "lane must be next, waiting, or someday.");
+  if ((actions as readonly string[]).includes(value)) return value as Action;
+  throw new HttpError(400, "invalid_query", "action must be do_now, delegate, schedule, or later.");
 }
 
 function parseStatus(value: string | undefined): TaskStatus | undefined {

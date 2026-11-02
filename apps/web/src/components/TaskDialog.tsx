@@ -1,8 +1,8 @@
-import type { BotTokenSummary, Lane, Member, Task, TeamSummary } from "@hearth/shared";
+import type { Action, BotTokenSummary, Member, Task } from "@hearth/shared";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
-import { actionLabel, actionOf, axesFor, type Action } from "@/lib/action";
+import { actionLabel, axesFor } from "@/lib/action";
 import { ApiError, api } from "@/lib/api";
 import { fieldClass } from "@/lib/field";
 import { fromLocalInput, ownerKey, parseOwnerKey, toLocalInput } from "@/lib/format";
@@ -10,7 +10,6 @@ import { fromLocalInput, ownerKey, parseOwnerKey, toLocalInput } from "@/lib/for
 export function TaskDialog({
   open,
   teamId,
-  teams,
   task,
   defaultOwnerId,
   defaultAction,
@@ -20,7 +19,6 @@ export function TaskDialog({
 }: {
   open: boolean;
   teamId: string;
-  teams: TeamSummary[];
   task: Task | null;
   defaultOwnerId: string;
   defaultAction: Action;
@@ -35,7 +33,6 @@ export function TaskDialog({
           <TaskForm
             key={task?.id ?? "new"}
             teamId={task?.teamId ?? teamId}
-            teams={teams}
             task={task}
             defaultOwnerId={defaultOwnerId}
             defaultAction={defaultAction}
@@ -50,8 +47,7 @@ export function TaskDialog({
 }
 
 function TaskForm({
-  teamId: initialTeamId,
-  teams,
+  teamId,
   task,
   defaultOwnerId,
   defaultAction,
@@ -60,7 +56,6 @@ function TaskForm({
   onComplete,
 }: {
   teamId: string;
-  teams: TeamSummary[];
   task: Task | null;
   defaultOwnerId: string;
   defaultAction: Action;
@@ -69,13 +64,13 @@ function TaskForm({
   onComplete: (task: Task) => void;
 }) {
   const seeded = task ? { important: task.important, urgent: task.urgent } : axesFor(defaultAction);
-  const [teamId, setTeamId] = useState(initialTeamId);
   const [members, setMembers] = useState<Member[]>([]);
   const [tokens, setTokens] = useState<BotTokenSummary[]>([]);
   const [title, setTitle] = useState(task?.title ?? "");
   const [detail, setDetail] = useState(task?.detail ?? "");
-  const [lane, setLane] = useState<Lane>(task?.lane ?? "next");
+  const [action, setAction] = useState<Action>(task?.action ?? defaultAction);
   const [waitingOn, setWaitingOn] = useState(task?.waitingOn ?? "");
+  const [calendarEventId, setCalendarEventId] = useState(task?.calendarEventId ?? "");
   const [project, setProject] = useState(task?.project ?? "");
   const [dueAt, setDueAt] = useState(toLocalInput(task?.dueAt ?? null));
   const [important, setImportant] = useState(seeded.important);
@@ -83,9 +78,7 @@ function TaskForm({
   const [owner, setOwner] = useState(task ? ownerKey(task.owner.type, task.owner.id) : ownerKey("user", defaultOwnerId));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const action = actionOf({ important, urgent });
   const activeTokens = tokens.filter((token) => token.revokedAt == null || token.id === task?.owner.id);
-  const teamName = teams.find((item) => item.id === teamId)?.name;
 
   useEffect(() => {
     let cancelled = false;
@@ -111,8 +104,8 @@ function TaskForm({
       setError("A task needs a title.");
       return;
     }
-    if (lane === "waiting" && !waitingOn.trim()) {
-      setError("Say what this is waiting on.");
+    if (action === "delegate" && !waitingOn.trim()) {
+      setError("Say who or what this is waiting on.");
       return;
     }
     if (!parsedOwner) {
@@ -124,10 +117,11 @@ function TaskForm({
     const body = {
       title: title.trim(),
       detail: detail.trim() || null,
-      lane,
-      waitingOn: lane === "waiting" ? waitingOn.trim() : null,
+      action,
+      waitingOn: action === "delegate" ? waitingOn.trim() : null,
+      ...(action === "schedule" ? { calendarEventId: calendarEventId.trim() || null } : {}),
       project: project.trim() || null,
-      dueAt: fromLocalInput(dueAt),
+      dueAt: action === "delegate" && !task && !dueAt ? undefined : fromLocalInput(dueAt),
       important,
       urgent,
       owner: parsedOwner,
@@ -152,27 +146,6 @@ function TaskForm({
       <DialogDescription className="sr-only">
         Important and urgent choose do now, delegate, schedule, or later.
       </DialogDescription>
-      {!task && teams.length > 1 ? (
-        <label className={`mt-6 block ${label}`}>
-          List
-          <select
-            className={fieldClass}
-            value={teamId}
-            onChange={(event) => {
-              setTeamId(event.target.value);
-              setOwner(ownerKey("user", defaultOwnerId));
-            }}
-          >
-            {teams.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-              </option>
-            ))}
-          </select>
-        </label>
-      ) : teamName ? (
-        <p className="mt-4 text-[13px] text-white/40">{teamName}</p>
-      ) : null}
       <label className="mt-6 block text-[11px] uppercase tracking-[0.16em] text-white/45">
         Title
         <input className={fieldClass} value={title} onChange={(event) => setTitle(event.target.value)} autoFocus required />
@@ -187,25 +160,32 @@ function TaskForm({
           Urgent
         </label>
       </div>
-      <p className="mt-3 text-[11px] uppercase tracking-[0.18em] text-white/70">{actionLabel[action]}</p>
       <label className={`mt-6 block ${label}`}>
-        Due
-        <input className={fieldClass} type="datetime-local" value={dueAt} onChange={(event) => setDueAt(event.target.value)} />
-      </label>
-      <label className={`mt-6 block ${label}`}>
-        Lane
-        <select className={fieldClass} value={lane} onChange={(event) => setLane(event.target.value as Lane)}>
-          <option value="next">Next</option>
-          <option value="waiting">Waiting</option>
-          <option value="someday">Someday</option>
+        Action
+        <select className={fieldClass} value={action} onChange={(event) => setAction(event.target.value as Action)}>
+          <option value="do_now">Do now</option>
+          <option value="delegate">Delegate</option>
+          <option value="schedule">Schedule</option>
+          <option value="later">Later</option>
         </select>
       </label>
-      {lane === "waiting" ? (
+      <p className="mt-3 text-[11px] uppercase tracking-[0.18em] text-white/70">{actionLabel[action]}</p>
+      {action === "delegate" ? (
         <label className={`mt-6 block ${label}`}>
           Waiting on
           <input className={fieldClass} value={waitingOn} onChange={(event) => setWaitingOn(event.target.value)} required />
         </label>
       ) : null}
+      {action === "schedule" ? (
+        <label className={`mt-6 block ${label}`}>
+          Calendar event id
+          <input className={fieldClass} value={calendarEventId} onChange={(event) => setCalendarEventId(event.target.value)} />
+        </label>
+      ) : null}
+      <label className={`mt-6 block ${label}`}>
+        {action === "delegate" ? "Follow-up" : "Due"}
+        <input className={fieldClass} type="datetime-local" value={dueAt} onChange={(event) => setDueAt(event.target.value)} />
+      </label>
       <label className={`mt-6 block ${label}`}>
         Owner
         <select className={fieldClass} value={owner} onChange={(event) => setOwner(event.target.value)}>

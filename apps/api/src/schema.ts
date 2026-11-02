@@ -3,7 +3,7 @@ import { boolean, index, pgEnum, pgTable, text, timestamp, unique, uuid } from "
 export const teamKind = pgEnum("team_kind", ["personal", "household"]);
 export const membershipRole = pgEnum("membership_role", ["owner", "member"]);
 export const taskStatus = pgEnum("task_status", ["open", "done"]);
-export const taskLane = pgEnum("task_lane", ["next", "waiting", "someday"]);
+export const taskAction = pgEnum("task_action", ["do_now", "delegate", "schedule", "later"]);
 export const actorType = pgEnum("actor_type", ["user", "bot"]);
 
 export const users = pgTable("users", {
@@ -73,8 +73,10 @@ export const tasks = pgTable(
     ownerId: uuid("owner_id").notNull(),
     important: boolean("important").notNull().default(false),
     urgent: boolean("urgent").notNull().default(false),
-    lane: taskLane("lane").notNull().default("next"),
+    action: taskAction("action").notNull().default("later"),
     waitingOn: text("waiting_on"),
+    calendarEventId: text("calendar_event_id"),
+    needsCalendar: boolean("needs_calendar").notNull().default(false),
     project: text("project"),
     dueAt: timestamp("due_at", { withTimezone: true }),
     outcome: text("outcome"),
@@ -84,5 +86,5 @@ export const tasks = pgTable(
     createdByType: actorType("created_by_type").notNull(),
     createdById: uuid("created_by_id").notNull(),
   },
-  (table) => [index("tasks_team_status_lane_idx").on(table.teamId, table.status, table.lane)],
+  (table) => [index("tasks_team_status_action_idx").on(table.teamId, table.status, table.action)],
 );

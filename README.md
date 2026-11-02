@@ -131,8 +131,10 @@ A task:
   "owner": { "type": "user", "id": "…" },
   "important": true,
   "urgent": true,
-  "lane": "next",
+  "action": "do_now",
   "waitingOn": null,
+  "calendarEventId": null,
+  "needsCalendar": false,
   "project": "Kitchen",
   "dueAt": "2026-11-02T00:00:00.000Z",
   "outcome": null,
@@ -143,11 +145,15 @@ A task:
 }
 ```
 
-`lane` is `next`, `waiting`, or `someday`. `waitingOn` is required when `lane` is `waiting`. `outcome` is required when the task is completed. There is no stored triage value. Important × urgent is the Eisenhower quadrant, and it only affects ordering.
+`action` is `do_now`, `delegate`, `schedule`, or `later`. On create, omit `action` to take the suggestion from important × urgent: both true → `do_now`, urgent only → `delegate`, important only → `schedule`, neither → `later`. Sending `action` overrides that suggestion and does not change the two flags.
 
-`GET /tasks` query: `teamId`, `lane`, `status` (`open` or `done`), `important`, `urgent`, `owner` (`user:<uuid>` or `bot:<uuid>`), `dueBefore`, `project`, `mine`. Humans who omit `teamId` get every team they belong to. A bot who omits `teamId` is limited to its token's team. Passing another team returns 403.
+`waitingOn` is required when `action` is `delegate`. On create, omit `dueAt` for a delegated task and the follow-up is set three days ahead. That date is the nudge. Sending `dueAt: null` stores no follow-up; the task joins the morning queue once it is more than three days old. `outcome` is required when the task is completed.
 
-`GET /tasks/do-immediately` returns open tasks in `next`, optionally for one `teamId`. Order: important and urgent, then important, then urgent, then the rest; within that, `dueAt` ascending with nulls last; then `updatedAt` descending.
+`calendarEventId` is an optional calendar event id. The server keeps `needsCalendar` in line with it: a `schedule` task with no id is stored with `needsCalendar` true, and any id forces `needsCalendar` false. You can omit `needsCalendar`.
+
+`GET /tasks` query: `teamId`, `action`, `status` (`open` or `done`), `important`, `urgent`, `owner` (`user:<uuid>` or `bot:<uuid>`), `dueBefore`, `project`, `mine`. `lane` is rejected. Humans who omit `teamId` get every team they belong to. A bot who omits `teamId` is limited to its token's team. Passing another team returns 403.
+
+`GET /tasks/do-immediately` returns open tasks that are `do_now`, or `schedule` and still need a calendar or have a `dueAt` in the past, or `delegate` with a follow-up at or before now (or no `dueAt` and `createdAt` more than three days ago). Optional `teamId`. Order: important and urgent, then important, then urgent, then the rest; within that, `dueAt` ascending with nulls last; then `updatedAt` descending.
 
 Other routes humans use from the app: `GET /auth/config`, `POST /auth/dev`, `GET /auth/google`, `GET /auth/me`, `POST /auth/logout`, `GET /teams`, `POST /teams`, `GET /teams/:id`, `POST /teams/:id/members`, `GET|POST /teams/:id/tokens`, `DELETE /teams/:id/tokens/:tokenId`.
 
@@ -167,11 +173,11 @@ Create, update, and complete. `TEAM` and `TASK` come from the previous responses
 
 ```bash
 curl -sS -b /tmp/hearth.cj -H 'content-type: application/json' \
-  -d '{"teamId":"TEAM","title":"Buy oat milk","important":true,"urgent":true,"lane":"next","project":"Kitchen"}' \
+  -d '{"teamId":"TEAM","title":"Buy oat milk","important":true,"urgent":true,"action":"do_now","project":"Kitchen"}' \
   http://127.0.0.1:43124/tasks
 
 curl -sS -b /tmp/hearth.cj -X PATCH -H 'content-type: application/json' \
-  -d '{"lane":"waiting","waitingOn":"the grocer opens"}' \
+  -d '{"action":"delegate","waitingOn":"the grocer opens"}' \
   http://127.0.0.1:43124/tasks/TASK
 
 curl -sS -b /tmp/hearth.cj -H 'content-type: application/json' \
@@ -204,4 +210,4 @@ Schema changes need a new SQL file under `apps/api/drizzle` and a matching entry
 
 ## Not in v1
 
-Attachments, email links, Google Calendar sync, a Project entity, and native apps. Railway config is in the repo; this repo does not create or deploy the Railway project.
+Attachments, email links, live Google Calendar create/sync, a Project entity, and native apps. A task can store a calendar event id. Railway config is in the repo; this repo does not create or deploy the Railway project.
