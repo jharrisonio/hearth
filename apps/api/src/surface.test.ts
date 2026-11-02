@@ -300,6 +300,157 @@ describe("task surface", { concurrency: 1 }, () => {
     const rows = await db.select().from(bots).where(and(eq(bots.teamId, fixture.team.id)));
     assert.equal(rows.length, 0);
   });
+
+  test("source is stored, listed, streamed through MCP, and cleared", async () => {
+    const fixture = await seed();
+    const column = await pool.query<{ data_type: string }>(
+      `select data_type from information_schema.columns
+       where table_schema = 'public' and table_name = 'tasks' and column_name = 'source'`,
+    );
+    assert.equal(column.rows[0]?.data_type, "jsonb");
+
+    const gmail = {
+      type: "email" as const,
+      href: "https://mail.google.com/mail/u/0/#all/18f2c4e8a1b2c3d4",
+      label: "Re: boiler",
+      externalId: "18f2c4e8a1b2c3d4",
+    };
+    const created = await postTask(
+      fixture.secret,
+      { teamId: fixture.team.id, title: "Book the boiler", action: "do_now", important: true, urgent: true, source: gmail },
+      "boiler-1",
+    );
+    assert.equal(created.status, 201);
+    assert.deepEqual(taskBody(created.json).source, gmail);
+
+    const replayed = await postTask(
+      fixture.secret,
+      {
+        teamId: fixture.team.id,
+        title: "Book the boiler",
+        action: "do_now",
+        important: true,
+        urgent: true,
+        source: { externalId: gmail.externalId, href: `  ${gmail.href}  `, type: "email", label: "  Re: boiler  " },
+      },
+      "boiler-1",
+    );
+    assert.equal(replayed.status, 200);
+    assert.equal(taskBody(replayed.json).id, taskBody(created.json).id);
+
+    const plain = await postTask(fixture.secret, { teamId: fixture.team.id, title: "No link" });
+    assert.equal(plain.status, 201);
+    assert.equal(taskBody(plain.json).source, null);
+
+    const listed = await call(fixture.secret, "GET", `/tasks?teamId=${fixture.team.id}`);
+    assert.equal(listed.status, 200);
+    const listedTasks = (listed.json as { tasks: { id: string; source: unknown }[] }).tasks;
+    assert.deepEqual(
+      listedTasks.find((task) => task.id === taskBody(created.json).id)?.source,
+      gmail,
+    );
+
+    const queue = await call(fixture.secret, "GET", "/tasks/do-immediately");
+    const queued = (queue.json as { tasks: { id: string; source: unknown }[] }).tasks.find(
+      (task) => task.id === taskBody(created.json).id,
+    );
+    assert.deepEqual(queued?.source, gmail);
+
+    const kept = await call(fixture.secret, "PATCH", `/tasks/${taskBody(created.json).id}`, { title: "Book the boiler service" });
+    assert.equal(kept.status, 200);
+    assert.deepEqual(taskBody(kept.json).source, gmail);
+
+    const page = {
+      type: "url" as const,
+      href: "https://example.com/manuals/boiler",
+      label: "Manual",
+    };
+    const replaced = await call(fixture.secret, "PATCH", `/tasks/${taskBody(created.json).id}`, { source: page });
+    assert.equal(replaced.status, 200);
+    assert.deepEqual(taskBody(replaced.json).source, page);
+
+    const cleared = await call(fixture.secret, "PATCH", `/tasks/${taskBody(created.json).id}`, { source: null });
+    assert.equal(cleared.status, 200);
+    assert.equal(taskBody(cleared.json).source, null);
+
+    const script = await postTask(fixture.secret, {
+      teamId: fixture.team.id,
+      title: "Nope",
+      source: { type: "url", href: "javascript:alert(1)" },
+    });
+    assert.equal(script.status, 400);
+    assert.equal(errorBody(script.json).code, "invalid_body");
+
+    const extra = await postTask(fixture.secret, {
+      teamId: fixture.team.id,
+      title: "Nope",
+      source: { type: "email", href: gmail.href, note: "nope" },
+    });
+    assert.equal(extra.status, 400);
+
+    const text = await postTask(fixture.secret, {
+      teamId: fixture.team.id,
+      title: "Nope",
+      source: gmail.href,
+    });
+    assert.equal(text.status, 400);
+
+    await assert.rejects(
+      pool.query(`update tasks set source = '"just a string"'::jsonb where id = $1`, [taskBody(created.json).id]),
+    );
+
+    const init = await rpc(fixture.secret, "initialize", {
+      protocolVersion: "2025-03-26",
+      capabilities: {},
+      clientInfo: { name: "hearth-test", version: "0" },
+    });
+    assert.equal(init.status, 200);
+    const tools = await rpc(fixture.secret, "tools/list");
+    const createTool = (rpcResult(tools.json) as { tools: { name: string; inputSchema?: unknown }[] }).tools.find(
+      (tool) => tool.name === "create_task",
+    );
+    const updateTool = (rpcResult(tools.json) as { tools: { name: string; inputSchema?: unknown }[] }).tools.find(
+      (tool) => tool.name === "update_task",
+    );
+    assert.match(JSON.stringify(createTool?.inputSchema), /"source"/);
+    assert.match(JSON.stringify(updateTool?.inputSchema), /"source"/);
+
+    const viaMcp = toolJson(
+      await rpc(fixture.secret, "tools/call", {
+        name: "create_task",
+        arguments: {
+          teamId: fixture.team.id,
+          title: "From the inbox",
+          source: gmail,
+        },
+      }),
+    ) as { id: string; source: typeof gmail };
+    assert.deepEqual(viaMcp.source, gmail);
+
+    const found = toolJson(
+      await rpc(fixture.secret, "tools/call", {
+        name: "list_tasks",
+        arguments: { teamId: fixture.team.id },
+      }),
+    ) as { tasks: { id: string; source: unknown }[] };
+    assert.deepEqual(found.tasks.find((task) => task.id === viaMcp.id)?.source, gmail);
+
+    const edited = toolJson(
+      await rpc(fixture.secret, "tools/call", {
+        name: "update_task",
+        arguments: { id: viaMcp.id, source: { type: "url", href: "https://example.com/parts" } },
+      }),
+    ) as { source: { type: string; href: string } };
+    assert.deepEqual(edited.source, { type: "url", href: "https://example.com/parts" });
+
+    const removed = toolJson(
+      await rpc(fixture.secret, "tools/call", {
+        name: "update_task",
+        arguments: { id: viaMcp.id, source: null },
+      }),
+    ) as { source: null };
+    assert.equal(removed.source, null);
+  });
 });
 
 async function seed() {
@@ -389,8 +540,9 @@ function toolJson(response: { json: unknown }) {
 }
 
 function taskBody(json: unknown) {
-  const task = json as { id: string; owner: { type: string; id: string }; title: string };
+  const task = json as { id: string; owner: { type: string; id: string }; title: string; source: unknown };
   assert.equal(typeof task.id, "string");
+  assert.ok("source" in task, "task includes source");
   return task;
 }
 

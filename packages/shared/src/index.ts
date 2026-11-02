@@ -6,12 +6,38 @@ export const taskStatuses = ["open", "done"] as const;
 export const teamKinds = ["personal", "household"] as const;
 export const membershipRoles = ["owner", "member"] as const;
 export const actorTypes = ["user", "bot"] as const;
+export const sourceTypes = ["email", "url"] as const;
 
 export type Action = (typeof actions)[number];
 export type TaskStatus = (typeof taskStatuses)[number];
 export type TeamKind = (typeof teamKinds)[number];
 export type MembershipRole = (typeof membershipRoles)[number];
 export type ActorType = (typeof actorTypes)[number];
+export type SourceType = (typeof sourceTypes)[number];
+
+/** http(s) only, so a source link can be opened and cannot be a script URL. */
+export function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:") && url.hostname.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Where a task came from. `email` is a mailbox deep link (Gmail's web URL goes in `href`).
+ * `url` is any other page. `externalId` is the provider's id, not the link itself.
+ */
+export const taskSourceSchema = z
+  .object({
+    type: z.enum(sourceTypes),
+    href: z.string().trim().min(1).max(2048).refine(isHttpUrl, "must be an http(s) URL"),
+    label: z.string().trim().min(1).max(200).optional(),
+    externalId: z.string().trim().min(1).max(512).optional(),
+  })
+  .strict();
+export type TaskSource = z.infer<typeof taskSourceSchema>;
 
 /** Three days as an exact duration. The SQL migration uses `interval '3 days'`. */
 export const FOLLOW_UP_MS = 3 * 24 * 60 * 60 * 1000;
@@ -94,6 +120,7 @@ export const taskSchema = z.object({
   calendarEventId: z.string().nullable(),
   needsCalendar: z.boolean(),
   project: z.string().nullable(),
+  source: taskSourceSchema.nullable(),
   dueAt: z.string().nullable(),
   outcome: z.string().nullable(),
   createdAt: z.string(),
@@ -136,6 +163,7 @@ export const createTaskSchema = z
     calendarEventId: z.string().trim().max(1024).nullable().optional(),
     needsCalendar: z.boolean().optional(),
     project: z.string().trim().max(120).nullable().optional(),
+    source: taskSourceSchema.nullable().optional(),
     dueAt: dueAt.optional(),
   })
   .strict();
@@ -153,6 +181,7 @@ export const updateTaskSchema = z
     calendarEventId: z.string().trim().max(1024).nullable().optional(),
     needsCalendar: z.boolean().optional(),
     project: z.string().trim().max(120).nullable().optional(),
+    source: taskSourceSchema.nullable().optional(),
     dueAt: dueAt.optional(),
   })
   .strict();

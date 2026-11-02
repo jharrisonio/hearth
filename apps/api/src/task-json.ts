@@ -1,4 +1,4 @@
-import type { Task } from "@hearth/shared";
+import { taskSourceSchema, type Task, type TaskSource } from "@hearth/shared";
 import { iso } from "./http.js";
 import { tasks } from "./schema.js";
 
@@ -17,6 +17,7 @@ export function toTask(row: typeof tasks.$inferSelect): Task {
     calendarEventId: row.calendarEventId,
     needsCalendar: row.needsCalendar,
     project: row.project,
+    source: readSource(row.source),
     dueAt: iso(row.dueAt),
     outcome: row.outcome,
     createdAt: iso(row.createdAt) ?? new Date(0).toISOString(),
@@ -24,4 +25,11 @@ export function toTask(row: typeof tasks.$inferSelect): Task {
     completedAt: iso(row.completedAt),
     createdBy: { type: row.createdByType, id: row.createdById },
   };
+}
+
+function readSource(value: TaskSource | null): TaskSource | null {
+  if (value == null) return null;
+  const parsed = taskSourceSchema.safeParse(value);
+  if (!parsed.success) throw new Error("Task source stored in an unexpected shape.");
+  return parsed.data;
 }
