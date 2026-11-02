@@ -353,7 +353,11 @@ describe("task surface", { concurrency: 1 }, () => {
     const queue = toolJson(
       await rpc(fixture.secret, "tools/call", { name: "list_do_immediately", arguments: {} }),
     ) as { tasks: { id: string }[] };
-    assert.ok(queue.tasks.some((task) => task.id === created.id));
+    assert.equal(
+      queue.tasks.some((task) => task.id === created.id),
+      false,
+      "a bot token does not see another bot's do_now in do-immediately",
+    );
 
     const done = toolJson(
       await rpc(fixture.secret, "tools/call", {
@@ -426,7 +430,7 @@ describe("task surface", { concurrency: 1 }, () => {
       gmail,
     );
 
-    const queue = await call(fixture.secret, "GET", "/tasks/do-immediately");
+    const queue = await call(null, "GET", "/tasks/do-immediately", undefined, undefined, cookieFor(fixture.user.id));
     const queued = (queue.json as { tasks: { id: string; source: unknown }[] }).tasks.find(
       (task) => task.id === taskBody(created.json).id,
     );
@@ -612,7 +616,14 @@ describe("task surface", { concurrency: 1 }, () => {
     });
     assert.equal(front.status, 201);
     assert.equal(secondFront.status, 201);
-    const queue = await call(fixture.secret, "GET", `/tasks/do-immediately?teamId=${fixture.team.id}`);
+    const queue = await call(
+      null,
+      "GET",
+      `/tasks/do-immediately?teamId=${fixture.team.id}`,
+      undefined,
+      undefined,
+      cookieFor(fixture.user.id),
+    );
     const queuedIds = new Set((queue.json as { tasks: { id: string; action: string }[] }).tasks.map((row) => row.id));
     assert.equal(queuedIds.has(taskBody(front.json).id), true);
     assert.equal(queuedIds.has(taskBody(secondFront.json).id), true);
@@ -824,6 +835,362 @@ describe("task surface", { concurrency: 1 }, () => {
     const doneList = await call(fixture.secret, "GET", `/tasks?teamId=${fixture.team.id}&status=done`);
     assert.equal((doneList.json as { tasks: { id: string }[] }).tasks.some((row) => row.id === finishedId), false);
   });
+
+  test("bot owners may omit waitingOn, and do-immediately follows the caller", async () => {
+    const fixture = await seed();
+    const cookie = cookieFor(fixture.user.id);
+    const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const future = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+    const registered = await call(fixture.secret, "POST", `/teams/${fixture.team.id}/bots`, {
+      agentId: "grok-fin",
+      name: "Fin",
+    });
+    assert.equal(registered.status, 201);
+    const fin = botBody(registered.json);
+
+    const humanMissing = await postTask(
+      null,
+      { teamId: fixture.team.id, title: "Wait on Tara", action: "delegate" },
+      undefined,
+      cookie,
+    );
+    assert.equal(humanMissing.status, 400);
+    assert.equal(errorBody(humanMissing.json).code, "waiting_on_required");
+
+    const humanBlank = await postTask(
+      null,
+      { teamId: fixture.team.id, title: "Blank human", action: "delegate", waitingOn: "   " },
+      undefined,
+      cookie,
+    );
+    assert.equal(humanBlank.status, 400);
+    assert.equal(errorBody(humanBlank.json).code, "waiting_on_required");
+
+    const suggestedMissing = await postTask(
+      null,
+      { teamId: fixture.team.id, title: "Urgent with no owner override", urgent: true },
+      undefined,
+      cookie,
+    );
+    assert.equal(suggestedMissing.status, 400);
+    assert.equal(errorBody(suggestedMissing.json).code, "waiting_on_required");
+
+    const humanDoNow = fullTask(
+      (
+        await postTask(null, { teamId: fixture.team.id, title: "James does this", action: "do_now" }, undefined, cookie)
+      ).json,
+    );
+    const outsiderDue = fullTask(
+      (
+        await postTask(
+          null,
+          {
+            teamId: fixture.team.id,
+            title: "Waiting on the CRA",
+            action: "delegate",
+            waitingOn: "the CRA",
+            dueAt: past,
+          },
+          undefined,
+          cookie,
+        )
+      ).json,
+    );
+    const outsiderFuture = fullTask(
+      (
+        await postTask(
+          null,
+          {
+            teamId: fixture.team.id,
+            title: "Waiting on Tara",
+            action: "delegate",
+            waitingOn: "Tara",
+            dueAt: future,
+          },
+          undefined,
+          cookie,
+        )
+      ).json,
+    );
+    const humanSchedulePast = fullTask(
+      (
+        await postTask(
+          null,
+          {
+            teamId: fixture.team.id,
+            title: "Overdue appointment",
+            action: "schedule",
+            calendarEventId: "evt-human",
+            dueAt: past,
+          },
+          undefined,
+          cookie,
+        )
+      ).json,
+    );
+
+    const botDelegateFuture = fullTask(
+      (
+        await postTask(fixture.secret, {
+          teamId: fixture.team.id,
+          title: "File the form",
+          action: "delegate",
+          dueAt: future,
+        })
+      ).json,
+    );
+    assert.equal(botDelegateFuture.owner.type, "bot");
+    assert.equal(botDelegateFuture.owner.id, fixture.tokenId);
+    assert.equal(botDelegateFuture.waitingOn, null);
+    assert.equal(botDelegateFuture.action, "delegate");
+
+    const botDelegateDue = fullTask(
+      (
+        await postTask(fixture.secret, {
+          teamId: fixture.team.id,
+          title: "Chase the reply",
+          action: "delegate",
+          waitingOn: null,
+          dueAt: past,
+        })
+      ).json,
+    );
+    assert.equal(botDelegateDue.waitingOn, null);
+
+    const botNoted = fullTask(
+      (
+        await postTask(fixture.secret, {
+          teamId: fixture.team.id,
+          title: "Bot waiting on a document",
+          action: "delegate",
+          waitingOn: "the signed form",
+        })
+      ).json,
+    );
+    assert.equal(botNoted.waitingOn, "the signed form");
+
+    const botBlank = fullTask(
+      (
+        await postTask(fixture.secret, {
+          teamId: fixture.team.id,
+          title: "Blank waiting on",
+          action: "delegate",
+          waitingOn: "   ",
+        })
+      ).json,
+    );
+    assert.equal(botBlank.waitingOn, null);
+
+    const botSuggested = fullTask(
+      (await postTask(fixture.secret, { teamId: fixture.team.id, title: "Urgent bot work", urgent: true })).json,
+    );
+    assert.equal(botSuggested.action, "delegate");
+    assert.equal(botSuggested.waitingOn, null);
+    assert.equal(typeof botSuggested.dueAt, "string");
+
+    const botNeedsCalendar = fullTask(
+      (
+        await postTask(fixture.secret, {
+          teamId: fixture.team.id,
+          title: "Book the bot a slot",
+          action: "schedule",
+          dueAt: future,
+        })
+      ).json,
+    );
+    assert.equal(botNeedsCalendar.needsCalendar, true);
+
+    const botSchedulePast = fullTask(
+      (
+        await postTask(fixture.secret, {
+          teamId: fixture.team.id,
+          title: "Bot appointment passed",
+          action: "schedule",
+          calendarEventId: "evt-bot",
+          dueAt: past,
+        })
+      ).json,
+    );
+    const botScheduleFuture = fullTask(
+      (
+        await postTask(fixture.secret, {
+          teamId: fixture.team.id,
+          title: "Bot appointment ahead",
+          action: "schedule",
+          calendarEventId: "evt-bot-future",
+          dueAt: future,
+        })
+      ).json,
+    );
+    const botDoNow = fullTask(
+      (
+        await postTask(fixture.secret, {
+          teamId: fixture.team.id,
+          title: "Misfiled as do now",
+          action: "do_now",
+        })
+      ).json,
+    );
+    const botDoNowStays = fullTask(
+      (
+        await postTask(fixture.secret, {
+          teamId: fixture.team.id,
+          title: "Still do now",
+          action: "do_now",
+        })
+      ).json,
+    );
+    const botLater = fullTask(
+      (await postTask(fixture.secret, { teamId: fixture.team.id, title: "Bot later", action: "later" })).json,
+    );
+
+    const finDelegate = fullTask(
+      (
+        await postTask(
+          null,
+          {
+            teamId: fixture.team.id,
+            title: "Fin's own list",
+            action: "delegate",
+            owner: { type: "bot", id: fin.id },
+            dueAt: past,
+          },
+          undefined,
+          cookie,
+        )
+      ).json,
+    );
+    assert.equal(finDelegate.waitingOn, null);
+    assert.equal(finDelegate.owner.id, fin.id);
+
+    const assignedToJames = await postTask(fixture.secret, {
+      teamId: fixture.team.id,
+      title: "Bot assigns to James",
+      action: "delegate",
+      owner: { type: "user", id: fixture.user.id },
+    });
+    assert.equal(assignedToJames.status, 400);
+    assert.equal(errorBody(assignedToJames.json).code, "waiting_on_required");
+
+    const turnedOver = await call(fixture.secret, "PATCH", `/tasks/${botDoNow.id}`, {
+      action: "delegate",
+      waitingOn: null,
+    });
+    assert.equal(turnedOver.status, 200);
+    assert.equal(fullTask(turnedOver.json).action, "delegate");
+    assert.equal(fullTask(turnedOver.json).waitingOn, null);
+
+    const humanPatch = await call(
+      null,
+      "PATCH",
+      `/tasks/${humanDoNow.id}`,
+      { action: "delegate" },
+      undefined,
+      cookie,
+    );
+    assert.equal(humanPatch.status, 400);
+    assert.equal(errorBody(humanPatch.json).code, "waiting_on_required");
+
+    const handToJames = await call(
+      null,
+      "PATCH",
+      `/tasks/${botDelegateFuture.id}`,
+      { owner: { type: "user", id: fixture.user.id }, waitingOn: null },
+      undefined,
+      cookie,
+    );
+    assert.equal(handToJames.status, 400);
+    assert.equal(errorBody(handToJames.json).code, "waiting_on_required");
+
+    const humanIds = new Set(taskIds((await call(null, "GET", "/tasks/do-immediately", undefined, undefined, cookie)).json));
+    assert.equal(humanIds.has(humanDoNow.id), true);
+    assert.equal(humanIds.has(outsiderDue.id), true);
+    assert.equal(humanIds.has(outsiderFuture.id), false);
+    assert.equal(humanIds.has(humanSchedulePast.id), true);
+    assert.equal(humanIds.has(botDelegateFuture.id), false);
+    assert.equal(humanIds.has(botDelegateDue.id), false);
+    assert.equal(humanIds.has(botSuggested.id), false);
+    assert.equal(humanIds.has(finDelegate.id), false);
+    assert.equal(humanIds.has(botNeedsCalendar.id), true);
+    assert.equal(humanIds.has(botSchedulePast.id), true);
+    assert.equal(humanIds.has(botScheduleFuture.id), false);
+    assert.equal(humanIds.has(botDoNow.id), false);
+    assert.equal(humanIds.has(botDoNowStays.id), true);
+    assert.equal(humanIds.has(botLater.id), false);
+
+    const botIds = new Set(taskIds((await call(fixture.secret, "GET", "/tasks/do-immediately")).json));
+    assert.equal(botIds.has(botDelegateFuture.id), true);
+    assert.equal(botIds.has(botDelegateDue.id), true);
+    assert.equal(botIds.has(botNoted.id), true);
+    assert.equal(botIds.has(botBlank.id), true);
+    assert.equal(botIds.has(botSuggested.id), true);
+    assert.equal(botIds.has(botDoNow.id), true);
+    assert.equal(botIds.has(botDoNowStays.id), false);
+    assert.equal(botIds.has(botNeedsCalendar.id), true);
+    assert.equal(botIds.has(botSchedulePast.id), true);
+    assert.equal(botIds.has(botScheduleFuture.id), false);
+    assert.equal(botIds.has(botLater.id), false);
+    assert.equal(botIds.has(finDelegate.id), false);
+    assert.equal(botIds.has(humanDoNow.id), false);
+    assert.equal(botIds.has(outsiderDue.id), false);
+    assert.equal(botIds.has(humanSchedulePast.id), false);
+
+    const finListed = await call(
+      fixture.secret,
+      "GET",
+      `/tasks?action=delegate&status=open&owner=bot:${fin.id}`,
+    );
+    assert.equal(finListed.status, 200);
+    assert.deepEqual(taskIds(finListed.json), [finDelegate.id]);
+
+    const done = await call(fixture.secret, "POST", `/tasks/${botDelegateDue.id}/complete`, { outcome: "Filed" });
+    assert.equal(done.status, 200);
+    const afterDone = new Set(taskIds((await call(fixture.secret, "GET", "/tasks/do-immediately")).json));
+    assert.equal(afterDone.has(botDelegateDue.id), false);
+
+    const listedTools = await rpc(fixture.secret, "tools/list");
+    const tools = (rpcResult(listedTools.json) as { tools: { name: string; description?: string }[] }).tools;
+    const description = (name: string) => tools.find((tool) => tool.name === name)?.description ?? "";
+    assert.match(description("create_task"), /waitingOn/);
+    assert.match(description("create_task"), /bot owner may omit waitingOn/);
+    assert.match(description("update_task"), /waitingOn/);
+    assert.match(description("list_do_immediately"), /open delegate tasks it owns/);
+    assert.match(description("list_tasks"), /owner=bot:<uuid>/);
+
+    const viaMcp = toolJson(
+      await rpc(fixture.secret, "tools/call", {
+        name: "create_task",
+        arguments: { teamId: fixture.team.id, title: "MCP delegate", action: "delegate" },
+      }),
+    ) as { id: string; waitingOn: string | null; owner: { id: string } };
+    assert.equal(viaMcp.waitingOn, null);
+    assert.equal(viaMcp.owner.id, fixture.tokenId);
+    const mcpQueue = toolJson(
+      await rpc(fixture.secret, "tools/call", { name: "list_do_immediately", arguments: {} }),
+    ) as { tasks: { id: string }[] };
+    assert.equal(
+      mcpQueue.tasks.some((task) => task.id === viaMcp.id),
+      true,
+    );
+    assert.equal(
+      mcpQueue.tasks.some((task) => task.id === humanDoNow.id),
+      false,
+    );
+
+    const denied = await rpc(fixture.secret, "tools/call", {
+      name: "create_task",
+      arguments: {
+        teamId: fixture.team.id,
+        title: "MCP for James",
+        action: "delegate",
+        owner: { type: "user", id: fixture.user.id },
+      },
+    });
+    const deniedResult = rpcResult(denied.json) as { isError?: boolean; content?: { text?: string }[] };
+    assert.equal(deniedResult.isError, true);
+    assert.match(deniedResult.content?.[0]?.text ?? "", /waiting_on_required/);
+  });
 });
 
 async function seed() {
@@ -925,6 +1292,24 @@ function taskBody(json: unknown) {
   assert.equal(typeof task.id, "string");
   assert.ok("source" in task, "task includes source");
   return task;
+}
+
+function fullTask(json: unknown) {
+  const task = taskBody(json) as ReturnType<typeof taskBody> & {
+    action: string;
+    waitingOn: string | null;
+    needsCalendar: boolean;
+    dueAt: string | null;
+    status: string;
+  };
+  assert.equal(typeof task.action, "string");
+  return task;
+}
+
+function taskIds(json: unknown) {
+  const rows = (json as { tasks?: { id: string }[] }).tasks;
+  assert.ok(Array.isArray(rows), JSON.stringify(json));
+  return rows.map((task) => task.id);
 }
 
 function namedBody(json: unknown) {

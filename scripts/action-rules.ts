@@ -13,7 +13,9 @@ import {
   createAreaSchema,
   createProjectSchema,
   createTaskSchema,
+  delegateRequiresWaitingOn,
   followUpFrom,
+  inBotQueue,
   inMorningQueue,
   isHttpUrl,
   isProjectFront,
@@ -117,6 +119,73 @@ function checkMorningQueue() {
     !inMorningQueue({ ...base, action: "later", needsCalendar: true, dueAt: past }, now),
     "later stays out of the morning queue",
   );
+  assert(
+    !inMorningQueue({ ...base, action: "delegate", dueAt: past, owner: { type: "bot" } }, now),
+    "a bot-owned delegate is the bot's work, not a human nudge",
+  );
+  assert(
+    inMorningQueue({ ...base, action: "delegate", dueAt: past, owner: { type: "user" } }, now),
+    "an overdue outsider delegate is in",
+  );
+  assert(
+    !inMorningQueue({ ...base, action: "delegate", dueAt: future, owner: { type: "user" } }, now),
+    "a future outsider delegate is out",
+  );
+}
+
+function checkBotQueue() {
+  const now = new Date("2026-11-02T12:00:00.000Z");
+  const past = new Date(now.getTime() - 60_000);
+  const future = new Date(now.getTime() + 60_000);
+  const botId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const otherId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const open = {
+    status: "open" as const,
+    needsCalendar: false,
+    dueAt: null as Date | null,
+    owner: { type: "bot" as const, id: botId },
+  };
+
+  assert(inBotQueue({ ...open, action: "delegate", dueAt: future }, botId, now), "an open bot delegate is in, even ahead");
+  assert(inBotQueue({ ...open, action: "delegate", dueAt: null }, botId, now), "a bot delegate with no follow-up is in");
+  assert(!inBotQueue({ ...open, status: "done", action: "delegate" }, botId, now), "a done bot delegate is out");
+  assert(!inBotQueue({ ...open, status: "cancelled", action: "delegate" }, botId, now), "a cancelled bot delegate is out");
+  assert(
+    !inBotQueue({ ...open, action: "delegate", owner: { type: "bot", id: otherId } }, botId, now),
+    "another bot's delegate is out",
+  );
+  assert(
+    !inBotQueue({ ...open, action: "delegate", owner: { type: "user", id: botId } }, botId, now),
+    "a user-owned delegate is out of the bot queue",
+  );
+  assert(
+    inBotQueue({ ...open, action: "schedule", needsCalendar: true, dueAt: future }, botId, now),
+    "a bot schedule that needs a calendar is in",
+  );
+  assert(inBotQueue({ ...open, action: "schedule", dueAt: past }, botId, now), "a bot's overdue schedule is in");
+  assert(!inBotQueue({ ...open, action: "schedule", dueAt: now }, botId, now), "schedule due exactly now is not yet overdue");
+  assert(!inBotQueue({ ...open, action: "schedule", dueAt: future }, botId, now), "a future linked schedule is out");
+  assert(!inBotQueue({ ...open, action: "do_now" }, botId, now), "do_now stays on the human morning queue");
+  assert(!inBotQueue({ ...open, action: "later", dueAt: past }, botId, now), "later stays out of the bot queue");
+}
+
+function checkDelegateWaiting() {
+  assert(!delegateRequiresWaitingOn("do_now", { type: "user" }), "do_now never needs waitingOn");
+  assert(delegateRequiresWaitingOn("delegate", { type: "user" }), "a user delegate needs waitingOn");
+  assert(delegateRequiresWaitingOn("delegate", undefined), "a missing owner still needs waitingOn");
+  assert(delegateRequiresWaitingOn("delegate", null), "a null owner still needs waitingOn");
+  assert(!delegateRequiresWaitingOn("delegate", { type: "bot" }), "a bot delegate may omit waitingOn");
+  assert(!delegateRequiresWaitingOn("later", { type: "bot" }), "later does not need waitingOn");
+
+  const sqlText = readFileSync(new URL("../apps/api/drizzle/0009_bot_delegate.sql", import.meta.url), "utf8");
+  assert(sqlText.includes(`"owner_type" = 'bot'`), "bot owners may store a delegate with no waitingOn");
+  assert(sqlText.includes("tasks_delegate_waiting_chk"), "delegate check keeps its name");
+  assert(
+    sqlText.includes(`"waiting_on" IS NOT NULL AND length(btrim("waiting_on")) > 0`),
+    "a human-owned delegate still needs waitingOn",
+  );
+  const journal = readFileSync(new URL("../apps/api/drizzle/meta/_journal.json", import.meta.url), "utf8");
+  assert(journal.includes("0009_bot_delegate"), "journal lists the bot delegate migration");
 }
 
 function checkSource() {
@@ -220,6 +289,8 @@ try {
   checkNeedsCalendar();
   checkFollowUp();
   checkMorningQueue();
+  checkBotQueue();
+  checkDelegateWaiting();
   checkSource();
   checkMigrationSql();
   console.log("action rules passed");

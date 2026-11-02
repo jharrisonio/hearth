@@ -3,6 +3,7 @@ import {
   cancelTaskSchema,
   completeTaskSchema,
   createTaskSchema,
+  delegateRequiresWaitingOn,
   followUpFrom,
   resolveNeedsCalendar,
   suggestAction,
@@ -55,7 +56,13 @@ taskRoutes.get("/do-immediately", async (c) => {
   const ids = await teamIdsFor(actor, teamId);
   if (ids.length === 0) return c.json({ tasks: [] });
   const rows = await taskViews()
-    .where(and(inArray(tasks.teamId, ids), eq(tasks.status, "open"), morningQueueFilter()))
+    .where(
+      and(
+        inArray(tasks.teamId, ids),
+        eq(tasks.status, "open"),
+        actor.type === "bot" ? botQueueFilter(actor.id) : morningQueueFilter(),
+      ),
+    )
     .orderBy(
       sql`CASE WHEN ${tasks.important} AND ${tasks.urgent} THEN 0 WHEN ${tasks.important} THEN 1 WHEN ${tasks.urgent} THEN 2 ELSE 3 END`,
       sql`${tasks.dueAt} ASC NULLS LAST`,
@@ -171,20 +178,20 @@ taskRoutes.patch("/:id", async (c) => {
   await requireTeam(c.get("actor"), existing.teamId);
 
   const action = body.action ?? existing.action;
+  const owner: ActorRef = body.owner ?? { type: existing.ownerType, id: existing.ownerId };
   const waitingOn =
     action === "delegate"
       ? body.waitingOn !== undefined
         ? blankToNull(body.waitingOn) ?? null
         : existing.waitingOn
       : null;
-  assertDelegate(action, waitingOn);
+  assertDelegate(action, waitingOn, owner);
   const calendarEventId =
     body.calendarEventId !== undefined ? blankToNull(body.calendarEventId) ?? null : existing.calendarEventId;
   const needsCalendar = resolveNeedsCalendar(action, calendarEventId, body.needsCalendar, {
     action: existing.action,
     needsCalendar: existing.needsCalendar,
   });
-  const owner: ActorRef = body.owner ?? { type: existing.ownerType, id: existing.ownerId };
   if (body.owner) await assertOwnerOnTeam(existing.teamId, owner);
   const projectId = body.projectId !== undefined ? body.projectId : existing.projectId;
   const areaId = body.areaId !== undefined ? body.areaId : existing.areaId;
@@ -304,11 +311,11 @@ function taskInsertValues(actor: Actor, body: CreateTaskInput, now: Date) {
   const important = body.important ?? false;
   const urgent = body.urgent ?? false;
   const action = body.action ?? suggestAction(important, urgent);
+  const owner = body.owner ?? actorRef(actor);
   const waitingOn = action === "delegate" ? blankToNull(body.waitingOn) ?? null : null;
-  assertDelegate(action, waitingOn);
+  assertDelegate(action, waitingOn, owner);
   const calendarEventId = blankToNull(body.calendarEventId) ?? null;
   const needsCalendar = resolveNeedsCalendar(action, calendarEventId, body.needsCalendar, null);
-  const owner = body.owner ?? actorRef(actor);
   const dueAt = action === "delegate" && body.dueAt === undefined ? followUpFrom(now) : parseDue(body.dueAt);
   return {
     owner,
@@ -342,17 +349,22 @@ async function assertLinks(teamId: string, projectId: string | null, areaId: str
   if (areaId) await assertNamedOnTeam("area", teamId, areaId);
 }
 
-function assertDelegate(action: Action, waitingOn: string | null) {
-  if (action === "delegate" && !waitingOn) {
-    throw new HttpError(400, "waiting_on_required", "Delegated tasks need waitingOn.");
+function assertDelegate(action: Action, waitingOn: string | null, owner: ActorRef) {
+  if (delegateRequiresWaitingOn(action, owner) && !waitingOn) {
+    throw new HttpError(
+      400,
+      "waiting_on_required",
+      "Delegated tasks need waitingOn unless a bot owns them.",
+    );
   }
 }
 
 /**
- * Same membership as `inMorningQueue` in @hearth/shared.
- * Schedule is strictly past; delegate includes due now.
+ * Human morning queue. Same membership as `inMorningQueue` when `owner` is set.
+ * Schedule is strictly past; an outsider delegate includes due now.
  * `later` is excluded, including future steps on a project.
  * Several do_now, delegate, or schedule tasks may share a project; this does not limit them.
+ * Bot-owned delegates stay out: they are that bot's work, not an outsider nudge.
  */
 function morningQueueFilter() {
   return sql`(
@@ -366,12 +378,31 @@ function morningQueueFilter() {
     )
     OR (
       ${tasks.action} = 'delegate'
+      AND ${tasks.ownerType} <> 'bot'
       AND (
         (${tasks.dueAt} IS NOT NULL AND ${tasks.dueAt} <= now())
         OR (${tasks.dueAt} IS NULL AND ${tasks.createdAt} < now() - interval '3 days')
       )
     )
   )`;
+}
+
+/** Same membership as `inBotQueue` in @hearth/shared. Scoped to this token's owner id. */
+function botQueueFilter(botId: string) {
+  return and(
+    eq(tasks.ownerType, "bot"),
+    eq(tasks.ownerId, botId),
+    sql`(
+      ${tasks.action} = 'delegate'
+      OR (
+        ${tasks.action} = 'schedule'
+        AND (
+          ${tasks.needsCalendar}
+          OR (${tasks.dueAt} IS NOT NULL AND ${tasks.dueAt} < now())
+        )
+      )
+    )`,
+  );
 }
 
 function parseDue(value: string | null | undefined): Date | null {

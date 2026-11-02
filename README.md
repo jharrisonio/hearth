@@ -153,7 +153,7 @@ A task:
 
 `action` is `do_now`, `delegate`, `schedule`, or `later`. On create, omit `action` to take the suggestion from important × urgent: both true → `do_now`, urgent only → `delegate`, important only → `schedule`, neither → `later`. Sending `action` overrides that suggestion and does not change the two flags.
 
-`waitingOn` is required when `action` is `delegate`. On create, omit `dueAt` for a delegated task and the follow-up is set three days ahead. That date is the nudge. Sending `dueAt: null` stores no follow-up; the task joins the morning queue once it is more than three days old. `outcome` is required when the task is completed.
+`waitingOn` is required when `action` is `delegate` and the owner is not a bot. A bot owner is who acts, so `waitingOn` may be null. On create, omit `dueAt` for a delegated task and the follow-up is set three days ahead. That date is the nudge for a human-owned delegate. Sending `dueAt: null` stores no follow-up; a human-owned task joins the morning queue once it is more than three days old. A bot-owned delegate is that bot's open work immediately. `outcome` is required when the task is completed.
 
 `status` is `open`, `done`, or `cancelled`. Cancel keeps the row: `POST /tasks/:id/cancel` sets `status` to `cancelled`, `cancelledAt`, and `outcome` (the body may omit it, and the stored value is then `cancelled`). `completedAt` stays null. A cancelled task is out of `status=open` and out of the morning queue. `GET /tasks?status=cancelled` is the audit list; a list with no status filter still includes it. Cancelling a done task is **409** `already_done`. Cancelling again, or completing a cancelled task, is **409** `already_cancelled`.
 
@@ -186,7 +186,11 @@ For Gmail, `href` is the thread URL from the Gmail address bar: `https://mail.go
 
 `GET /tasks` query: `teamId`, `action`, `status` (`open`, `done`, or `cancelled`), `important`, `urgent`, `owner` (`user:<uuid>` or `bot:<uuid>`), `dueBefore`, `projectId`, `areaId`, `mine`. `lane` is rejected, and so is the old `project` string. Humans who omit `teamId` get every team they belong to. A bot who omits `teamId` is limited to its token's team. Passing another team returns 403.
 
-`GET /tasks/do-immediately` returns open tasks that are `do_now`, or `schedule` and still need a calendar or have a `dueAt` in the past, or `delegate` with a follow-up at or before now (or no `dueAt` and `createdAt` more than three days ago). Done, cancelled, and `later` tasks stay out, including future steps on a project. Optional `teamId`. Order: important and urgent, then important, then urgent, then the rest; within that, `dueAt` ascending with nulls last; then `updatedAt` descending.
+`GET /tasks/do-immediately` depends on who is signed in. Optional `teamId`. Done, cancelled, and `later` stay out, including future steps on a project. Order for both: important and urgent, then important, then urgent, then the rest; within that, `dueAt` ascending with nulls last; then `updatedAt` descending.
+
+A human gets the morning queue: open `do_now` tasks, `schedule` tasks that still need a calendar or have a `dueAt` in the past, and `delegate` tasks whose owner is not a bot and whose follow-up is at or before now (or no `dueAt` and `createdAt` more than three days ago). Bot-owned delegates stay out of that queue. They are the bot's work, not a nudge that James is waiting on Tara or the CRA.
+
+A bot token gets its own open work: `delegate` tasks owned by that token, at any follow-up, plus `schedule` tasks that token owns which still need a calendar or are overdue. `do_now` stays human work and is not included. Another registered bot (Fin, Rally) is not the token. List that bot's open delegate work with `GET /tasks?action=delegate&status=open&owner=bot:<id>`.
 
 Other routes humans use from the app: `GET /auth/config`, `POST /auth/dev`, `GET /auth/google`, `GET /auth/me`, `POST /auth/logout`, `GET /teams`, `POST /teams`, `GET /teams/:id`, `GET /teams/:id/events`, `POST /teams/:id/members`, `GET|POST /teams/:id/bots`, `DELETE /teams/:id/bots/:botId`, `GET|POST /teams/:id/projects`, `PATCH /teams/:id/projects/:projectId`, `GET|POST /teams/:id/areas`, `PATCH /teams/:id/areas/:areaId`, `GET|POST /teams/:id/tokens`, `DELETE /teams/:id/tokens/:tokenId`.
 
@@ -258,7 +262,7 @@ curl -sS -D - -b /tmp/hearth.cj -H 'content-type: application/json' \
 
 A registered bot is an identity, not a credential. `POST /teams/:id/bots` with `{ "agentId": "…", "name": "Fin" }` creates a row and returns its id. No `hth_…` secret is minted. That id is the task owner: `{ "type": "bot", "id": "…" }`. The same agent id on the same team returns the same bot (200). A different name renames it and keeps the id. `GET /teams/:id/bots` lists them. `DELETE /teams/:id/bots/:botId` unregisters one; tasks already pointing at that id are left as they are.
 
-Anyone who can see the team can register, including the team bot token. A random bot id is rejected with 400 `invalid_owner`. An existing per-bot token can still own a task through the API — that mint stays an escape hatch, and it is not required. The task sheet lists team members and registered bots. Waiting on stays a free-text string. Settings can register a bot so it appears there.
+Anyone who can see the team can register, including the team bot token. A random bot id is rejected with 400 `invalid_owner`. An existing per-bot token can still own a task through the API — that mint stays an escape hatch, and it is not required. The task sheet lists team members and registered bots. Waiting on stays a free-text string, and the sheet leaves it optional when the owner is a bot. Settings can register a bot so it appears there.
 
 ## Live task events
 
