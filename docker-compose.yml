@@ -1,0 +1,68 @@
+# Local stack: Postgres + API + React PWA.
+# Web:  http://127.0.0.1:43123
+# API:  http://127.0.0.1:43124
+# DB:   postgres://hearth:hearth@127.0.0.1:54329/hearth
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: hearth
+      POSTGRES_PASSWORD: hearth
+      POSTGRES_DB: hearth
+    ports:
+      - "54329:5432"
+    volumes:
+      - hearth_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hearth -d hearth"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      DATABASE_URL: postgres://hearth:hearth@postgres:5432/hearth
+      SESSION_SECRET: ${SESSION_SECRET:-dev-session-secret-change-me}
+      DEV_AUTH: ${DEV_AUTH:-1}
+      SEED: ${SEED:-1}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      PUBLIC_URL: ${PUBLIC_URL:-http://127.0.0.1:43123}
+      PORT: "3001"
+    ports:
+      - "43124:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+      start_period: 15s
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    environment:
+      API_UPSTREAM: http://api:3001
+      PORT: "80"
+    ports:
+      - "43123:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  hearth_pg:

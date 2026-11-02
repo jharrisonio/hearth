@@ -1,0 +1,10 @@
+node_modules
+**/node_modules
+**/dist
+**/.pnpm-store
+.git
+uploads
+.env
+.env.local
+*.log
+apps/web/dev-dist
