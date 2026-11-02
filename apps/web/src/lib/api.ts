@@ -91,8 +91,11 @@ export const api = {
     ),
   createProject: (teamId: string, body: { name: string; notes?: string | null }) =>
     request<ProjectSummary>(`/teams/${teamId}/projects`, { method: "POST", body: JSON.stringify(body) }),
-  updateProject: (teamId: string, id: string, body: { name?: string; notes?: string | null; archived?: boolean }) =>
-    request<ProjectSummary>(`/teams/${teamId}/projects/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  updateProject: (
+    teamId: string,
+    id: string,
+    body: { name?: string; notes?: string | null; areaId?: string | null; archived?: boolean },
+  ) => request<ProjectSummary>(`/teams/${teamId}/projects/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   areas: (teamId: string, includeArchived = false) =>
     request<{ areas: AreaSummary[] }>(`/teams/${teamId}/areas${includeArchived ? "?includeArchived=true" : ""}`),
   createArea: (teamId: string, name: string) =>

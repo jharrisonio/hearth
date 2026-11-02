@@ -27,6 +27,8 @@ export function Home() {
   const [completing, setCompleting] = useState<Task | null>(null);
   const [pickingList, setPickingList] = useState(false);
   const [projectsOpen, setProjectsOpen] = useState(false);
+  const [projectFocus, setProjectFocus] = useState<string | null>(null);
+  const [cover, setCover] = useState<"task" | "project">("task");
   const [taskRevision, setTaskRevision] = useState(0);
   const [creatingHousehold, setCreatingHousehold] = useState(false);
 
@@ -76,7 +78,20 @@ export function Home() {
       setError("Open settings to create a household first.");
       return;
     }
+    setCover("task");
     setEditing({ teamId: current.id, task: null });
+  }
+
+  function openProject(id: string) {
+    setProjectFocus(id);
+    setProjectsOpen(true);
+    setCover("project");
+  }
+
+  function openProjects() {
+    setProjectFocus(null);
+    setProjectsOpen(true);
+    setCover("project");
   }
 
   function chooseList(id: string) {
@@ -106,7 +121,7 @@ export function Home() {
             <button
               type="button"
               className="shrink-0 pl-[0.28em] text-[10px] font-normal uppercase tracking-[0.28em] text-[#8a8a8a] transition-colors duration-150 hover:text-white active:opacity-40 disabled:opacity-40"
-              onClick={() => setProjectsOpen(true)}
+              onClick={openProjects}
               disabled={!current}
             >
               Projects
@@ -137,7 +152,16 @@ export function Home() {
           {visible.length > 0 ? (
             <ul key={`${current?.id ?? "none"}-${filter}`} className="hearth-fade flex w-full flex-col">
               {visible.map((task) => (
-                <TaskRow key={task.id} task={task} onOpen={() => current && setEditing({ teamId: current.id, task })} />
+                <TaskRow
+                  key={task.id}
+                  task={task}
+                  onOpen={() => {
+                    if (!current) return;
+                    setCover("task");
+                    setEditing({ teamId: current.id, task });
+                  }}
+                  onOpenProject={openProject}
+                />
               ))}
             </ul>
           ) : null}
@@ -175,20 +199,31 @@ export function Home() {
       {current ? (
         <ProjectsSheet
           open={projectsOpen}
+          layer={editing && cover === "project" ? "front" : "base"}
           teamId={current.id}
           ownerId={user.id}
           refreshToken={taskRevision}
-          onClose={() => setProjectsOpen(false)}
-          onEditTask={(task) => setEditing({ teamId: current.id, task })}
+          initialProjectId={projectFocus}
+          onClose={() => {
+            setProjectsOpen(false);
+            setProjectFocus(null);
+          }}
+          onClearFocus={() => setProjectFocus(null)}
+          onEditTask={(task) => {
+            setCover("task");
+            setEditing({ teamId: current.id, task });
+          }}
         />
       ) : null}
       {editing ? (
         <TaskDialog
           open
+          layer={projectsOpen && cover === "task" ? "front" : "base"}
           teamId={editing.teamId}
           task={editing.task}
           defaultOwnerId={user.id}
           defaultAction={filter}
+          onOpenProject={openProject}
           onClose={() => setEditing(null)}
           onSaved={() => {
             setTaskRevision((revision) => revision + 1);
@@ -209,7 +244,7 @@ export function Home() {
         onChoose={chooseList}
         onProjects={() => {
           setPickingList(false);
-          setProjectsOpen(true);
+          openProjects();
         }}
         onCreate={() => {
           setPickingList(false);

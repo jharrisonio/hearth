@@ -145,6 +145,8 @@ export const taskSchema = z.object({
   updatedAt: z.string(),
   completedAt: z.string().nullable(),
   cancelledAt: z.string().nullable(),
+  /** Position among steps on the same project. Null sorts after numbered steps. */
+  sortOrder: z.number().int().nullable(),
   createdBy: actorRefSchema,
 });
 export type Task = z.infer<typeof taskSchema>;
@@ -170,6 +172,7 @@ export interface TaskEvent {
 }
 
 const dueAt = z.string().datetime({ offset: true }).nullable();
+const sortOrder = z.number().int().min(0).max(1_000_000).nullable();
 
 export const createTaskSchema = z
   .object({
@@ -187,6 +190,7 @@ export const createTaskSchema = z
     areaId: z.string().uuid().nullable().optional(),
     source: taskSourceSchema.nullable().optional(),
     dueAt: dueAt.optional(),
+    sortOrder: sortOrder.optional(),
   })
   .strict();
 export type CreateTaskInput = z.infer<typeof createTaskSchema>;
@@ -206,6 +210,7 @@ export const updateTaskSchema = z
     areaId: z.string().uuid().nullable().optional(),
     source: taskSourceSchema.nullable().optional(),
     dueAt: dueAt.optional(),
+    sortOrder: sortOrder.optional(),
   })
   .strict();
 export type UpdateTaskInput = z.infer<typeof updateTaskSchema>;
@@ -427,9 +432,10 @@ export const namedSummarySchema = z.object({
 });
 export type AreaSummary = z.infer<typeof namedSummarySchema>;
 
-/** A project (multi-step outcome). `notes` is the natural-planning sketch, not the step list. */
+/** A project (multi-step outcome). `notes` is the support plan, not the step list. `area` is the domain it sits in. */
 export const projectSummarySchema = namedSummarySchema.extend({
   notes: z.string().nullable(),
+  area: taskLinkSchema.nullable(),
 });
 export type ProjectSummary = z.infer<typeof projectSummarySchema>;
 
@@ -447,12 +453,15 @@ export const updateProjectSchema = z
   .object({
     name: z.string().trim().min(1).max(120).optional(),
     notes: projectNotes.optional(),
+    areaId: z.string().uuid().nullable().optional(),
     archived: z.boolean().optional(),
   })
   .strict()
-  .refine((value) => value.name !== undefined || value.notes !== undefined || value.archived !== undefined, {
-    message: "Provide a name, notes, or archived.",
-  });
+  .refine(
+    (value) =>
+      value.name !== undefined || value.notes !== undefined || value.areaId !== undefined || value.archived !== undefined,
+    { message: "Provide a name, notes, area, or archived." },
+  );
 export type UpdateProjectInput = z.infer<typeof updateProjectSchema>;
 
 export const createAreaSchema = z
@@ -484,12 +493,18 @@ export const updateProjectToolSchema = z
     teamId: z.string().uuid().optional(),
     name: z.string().trim().min(1).max(120).optional(),
     notes: projectNotes.optional(),
+    areaId: z.string().uuid().nullable().optional(),
     archived: z.boolean().optional(),
   })
   .strict()
-  .refine((value) => value.name !== undefined || value.notes !== undefined || value.archived !== undefined, {
-    message: "Provide a name, notes, or archived.",
-  });
+  .refine(
+    (value) =>
+      value.name !== undefined ||
+      value.notes !== undefined ||
+      value.areaId !== undefined ||
+      value.archived !== undefined,
+    { message: "Provide a name, notes, area, or archived." },
+  );
 export type UpdateProjectToolInput = z.infer<typeof updateProjectToolSchema>;
 
 export const createAreaToolSchema = createAreaSchema.extend({
