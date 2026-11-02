@@ -30,15 +30,16 @@ async function list(c: Context<AppEnv>, kind: Kind) {
   const includeArchived = parseFlag(c.req.query("includeArchived"), "includeArchived");
   const rows = await listNamed(kind, teamId, includeArchived);
   const key = kind === "project" ? "projects" : "areas";
-  return c.json({ [key]: rows.map(toNamed) });
+  return c.json({ [key]: rows.map((row) => toNamed(kind, row)) });
 }
 
 async function create(c: Context<AppEnv>, kind: Kind) {
   const teamId = teamParam(c);
   await requireTeam(c.get("actor"), teamId);
   const body = parseBody(createSchemas[kind], await readJson(c));
-  const { row, created } = await createNamed(kind, teamId, body.name);
-  return c.json(toNamed(row), created ? 201 : 200);
+  const notes = kind === "project" ? (body as { notes?: string | null }).notes : undefined;
+  const { row, created } = await createNamed(kind, teamId, body.name, notes);
+  return c.json(toNamed(kind, row), created ? 201 : 200);
 }
 
 async function update(c: Context<AppEnv>, kind: Kind) {
@@ -49,11 +50,11 @@ async function update(c: Context<AppEnv>, kind: Kind) {
   await requireTeam(c.get("actor"), teamId);
   const raw = await readJson(c);
   if (!raw || typeof raw !== "object" || Array.isArray(raw) || Object.keys(raw).length === 0) {
-    throw new HttpError(400, "invalid_body", "Provide a name or archived.");
+    throw new HttpError(400, "invalid_body", "Provide a name, notes, or archived.");
   }
   const body = parseBody(updateSchemas[kind], raw);
   const row = await updateNamed(kind, teamId, id, body);
-  return c.json(toNamed(row));
+  return c.json(toNamed(kind, row));
 }
 
 function teamParam(c: Context<AppEnv>) {

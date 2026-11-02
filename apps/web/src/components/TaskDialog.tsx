@@ -117,8 +117,27 @@ function TaskForm({
         if (cancelled) return;
         setMembers(detailResponse.members);
         setBots(botList.bots);
-        setProjects(withCurrent(projectList.projects, task?.project ?? null, teamId));
-        setAreas(withCurrent(areaList.areas, task?.area ?? null, teamId));
+        setProjects(
+          withCurrent(projectList.projects, task?.project ?? null, (current) => ({
+            id: current.id,
+            teamId,
+            name: current.name,
+            notes: null,
+            archivedAt: new Date(0).toISOString(),
+            createdAt: current.id,
+            updatedAt: current.id,
+          })),
+        );
+        setAreas(
+          withCurrent(areaList.areas, task?.area ?? null, (current) => ({
+            id: current.id,
+            teamId,
+            name: current.name,
+            archivedAt: new Date(0).toISOString(),
+            createdAt: current.id,
+            updatedAt: current.id,
+          })),
+        );
         setOwnersLoaded(true);
       })
       .catch((err: unknown) => {
@@ -317,19 +336,19 @@ function TaskForm({
               {bot.name}
             </option>
           ))}
-          {keepCurrentOwner ? <option value={owner}>Current owner</option> : null}
+          {keepCurrentOwner ? <option value={owner}>Owner</option> : null}
         </select>
       </label>
       <div className="grid grid-cols-1 gap-x-6 sm:grid-cols-2">
         <LinkField
           label="Project"
-          hint="A multi-step outcome."
+          hint="A multi-step outcome. Open Projects for the other steps. Future ones stay Later."
           placeholder="e.g. Tara AU returns"
           value={projectId}
           options={projects}
           onChange={setProjectId}
           onCreate={(name) =>
-            createLink(name, (next) => api.createProject(teamId, next), setProjects, setProjectId, setError)
+            createLink(name, (next) => api.createProject(teamId, { name: next }), setProjects, setProjectId, setError)
           }
         />
         <LinkField
@@ -442,25 +461,19 @@ function TaskForm({
   );
 }
 
-function withCurrent<T extends ProjectSummary>(rows: T[], current: TaskLink | null, teamId: string): T[] {
+function withCurrent<T extends { id: string; name: string }>(
+  rows: T[],
+  current: TaskLink | null,
+  fill: (current: TaskLink) => T,
+): T[] {
   if (!current || rows.some((row) => row.id === current.id)) return rows;
-  return [
-    ...rows,
-    {
-      id: current.id,
-      teamId,
-      name: current.name,
-      archivedAt: new Date(0).toISOString(),
-      createdAt: current.id,
-      updatedAt: current.id,
-    } as T,
-  ];
+  return [...rows, fill(current)];
 }
 
-async function createLink(
+async function createLink<T extends { id: string; name: string }>(
   name: string,
-  create: (name: string) => Promise<ProjectSummary>,
-  setRows: Dispatch<SetStateAction<ProjectSummary[]>>,
+  create: (name: string) => Promise<T>,
+  setRows: Dispatch<SetStateAction<T[]>>,
   setId: (id: string) => void,
   setError: (message: string | null) => void,
 ) {
@@ -493,7 +506,7 @@ function LinkField({
   hint: string;
   placeholder: string;
   value: string;
-  options: ProjectSummary[];
+  options: { id: string; name: string; archivedAt: string | null }[];
   onChange: (id: string) => void;
   onCreate: (name: string) => Promise<void>;
 }) {

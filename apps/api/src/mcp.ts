@@ -18,6 +18,8 @@ import {
   registerBotSchema,
   registerBotToolSchema,
   unregisterBotToolSchema,
+  updateProjectSchema,
+  updateProjectToolSchema,
   updateTaskSchema,
   updateTaskToolSchema,
   type ListNamedToolInput,
@@ -50,7 +52,7 @@ export async function handleMcp(c: Context, app: FetchApp): Promise<Response> {
     { name: "hearth", version: SERVER_VERSION },
     {
       instructions:
-        "Hearth tasks for the team this bot token belongs to. Pass idempotencyKey on create_task when a retry must return the original task instead of a duplicate. The key lasts 24 hours for this bot. A project is a multi-step outcome; an area is a life or work domain such as House or Finance. Link them with projectId and areaId. Register Fin, Rally, and other agents with register_bot (agent id and display name, no extra token) and set owner to that bot id. Set source to { type: \"email\" | \"url\", href, label?, externalId? } to link the originating email or page. For Gmail, href is https://mail.google.com/mail/u/0/#all/<threadId> and externalId is the message or thread id. Pass source: null on update_task to clear it. cancel_task keeps the row for audit. delete_task removes a mistake or duplicate. Live edits are not pushed over MCP. Subscribe with GET /teams/:teamId/events (text/event-stream, same Bearer token). Read the hearth://task-events resource for the exact URL and the event shape.",
+        "Hearth tasks for the team this bot token belongs to. Pass idempotencyKey on create_task when a retry must return the original task instead of a duplicate. The key lasts 24 hours for this bot. A project is a multi-step outcome; an area is a life or work domain such as House or Finance. Link them with projectId and areaId. On a project, do_now, delegate, and schedule are active next actions and several may run at once. Future or dependent steps are separate tasks with action later. Project notes hold the plan, not the step list. Later steps stay out of list_do_immediately. Register Fin, Rally, and other agents with register_bot (agent id and display name, no extra token) and set owner to that bot id. Set source to { type: \"email\" | \"url\", href, label?, externalId? } to link the originating email or page. For Gmail, href is https://mail.google.com/mail/u/0/#all/<threadId> and externalId is the message or thread id. Pass source: null on update_task to clear it. cancel_task keeps the row for audit. delete_task removes a mistake or duplicate. Live edits are not pushed over MCP. Subscribe with GET /teams/:teamId/events (text/event-stream, same Bearer token). Read the hearth://task-events resource for the exact URL and the event shape.",
     },
   );
   registerTaskTools(server, app, authorization ?? "");
@@ -113,7 +115,7 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "create_task",
     {
       description:
-        "Create a task (POST /tasks). idempotencyKey is sent as the Idempotency-Key header. The same key and body, for this bot, returns the original task for 24 hours. A different body with that key is rejected. owner, when type bot, must be a bot registered on the team (or an existing token id). projectId and areaId link a project or an area on the same team. source, when set, is { type: \"email\" | \"url\", href, label?, externalId? }. href is an http(s) URL. For Gmail, type is email and href is the mail.google.com deep link.",
+        "Create one task (POST /tasks), one project step per call. Active next actions are action do_now, delegate, or schedule — several may share a project. Future or dependent steps use action later unless that step is explicitly active. Omit action to take the important × urgent suggestion (neither suggests later). idempotencyKey is sent as the Idempotency-Key header. The same key and body, for this bot, returns the original task for 24 hours. A different body with that key is rejected. owner, when type bot, must be a bot registered on the team (or an existing token id). projectId and areaId link a project or an area on the same team. source, when set, is { type: \"email\" | \"url\", href, label?, externalId? }. href is an http(s) URL. For Gmail, type is email and href is the mail.google.com deep link.",
       inputSchema: createTaskToolSchema,
     },
     async ({ idempotencyKey, ...body }) => {
@@ -132,7 +134,7 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "update_task",
     {
       description:
-        "Update a task (PATCH /tasks/:id). Status cannot be changed here. Complete the task with complete_task, or cancel it with cancel_task. owner, when type bot, must be a bot registered on the team (or an existing token id). Pass projectId or areaId as a uuid to set that link, or null to clear it. Omit either field to leave it unchanged. source replaces the link; null clears it. Omit source to leave the link unchanged.",
+        "Update a task (PATCH /tasks/:id). Set action to move a project step between an active front (do_now, delegate, schedule) and later. Several active fronts on one project are allowed. Status cannot be changed here. Complete the task with complete_task, or cancel it with cancel_task. owner, when type bot, must be a bot registered on the team (or an existing token id). Pass projectId or areaId as a uuid to set that link, or null to clear it. Omit either field to leave it unchanged. source replaces the link; null clears it. Omit source to leave the link unchanged.",
       inputSchema: updateTaskToolSchema,
     },
     async ({ id, ...patch }) => {
@@ -191,7 +193,7 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "list_tasks",
     {
       description:
-        "List tasks (GET /tasks). Each task includes source (an email or url link, or null), plus project and area when set. Filters: teamId, action (do_now, delegate, schedule, later), status (open, done, or cancelled), important, urgent, owner (user:<uuid> or bot:<uuid>), dueBefore, projectId, areaId, mine. Omit teamId to use this bot's team. status=open hides cancelled tasks. status=cancelled is the audit list.",
+        "List tasks (GET /tasks). Each task includes action, source (an email or url link, or null), plus project and area when set. Filter projectId together with action to separate a project's active steps (do_now, delegate, schedule) from later support steps. Other filters: teamId, status (open, done, or cancelled), important, urgent, owner (user:<uuid> or bot:<uuid>), dueBefore, areaId, mine. Omit teamId to use this bot's team. status=open hides cancelled tasks. status=cancelled is the audit list.",
       inputSchema: listTasksQuerySchema,
     },
     async (query) => asTool(await callApi(app, authorization, `${httpOperations.listTasks.path}${queryString(query)}`)),
@@ -201,7 +203,7 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "list_do_immediately",
     {
       description:
-        "Morning queue (GET /tasks/do-immediately): open do_now tasks, schedule tasks that still need a calendar or are overdue, and delegate follow-ups that are due. Done and cancelled tasks stay out. Optional teamId.",
+        "Morning queue (GET /tasks/do-immediately): open do_now tasks, schedule tasks that still need a calendar or are overdue, and delegate follow-ups that are due. Done, cancelled, and action later stay out, including future steps on a project. Optional teamId.",
       inputSchema: doImmediatelyQuerySchema,
     },
     async (query) =>
@@ -212,15 +214,34 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "create_project",
     {
       description:
-        "Create a project on a team (POST /teams/:id/projects). A project is a multi-step outcome, not a life area. The same name returns the existing project and restores it if it was archived. Omit teamId when this token belongs to one team.",
+        "Create a project (POST /teams/:id/projects). A project is a multi-step outcome, not a life area. notes is an optional plan. Steps are tasks with that projectId. The same name returns the existing project, restores it if archived, and replaces notes when notes is sent. Omit teamId when this token belongs to one team.",
       inputSchema: createProjectToolSchema,
     },
-    async ({ teamId, name }) => {
+    async ({ teamId, ...body }) => {
       const resolved = await resolveTeamId(app, authorization, teamId);
       if ("failure" in resolved) return asTool(resolved.failure);
-      const parsed = createProjectSchema.parse({ name });
+      const parsed = createProjectSchema.parse(body);
       return asTool(await callApi(app, authorization, `/teams/${resolved.teamId}/projects`, {
         method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(parsed),
+      }));
+    },
+  );
+
+  server.registerTool(
+    "update_project",
+    {
+      description:
+        "Update a project (PATCH /teams/:id/projects/:id). Change name, notes, or archived. Null notes clears the plan. Steps stay tasks. Omit teamId when this token belongs to one team.",
+      inputSchema: updateProjectToolSchema,
+    },
+    async ({ id, teamId, ...patch }) => {
+      const resolved = await resolveTeamId(app, authorization, teamId);
+      if ("failure" in resolved) return asTool(resolved.failure);
+      const parsed = updateProjectSchema.parse(patch);
+      return asTool(await callApi(app, authorization, `/teams/${resolved.teamId}/projects/${id}`, {
+        method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(parsed),
       }));
@@ -231,7 +252,7 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "list_projects",
     {
       description:
-        "List projects on a team (GET /teams/:id/projects). Archived projects are omitted unless includeArchived is true. Omit teamId when this token belongs to one team.",
+        "List projects (GET /teams/:id/projects), each with notes. A project is a multi-step outcome; its steps are tasks. Archived projects are omitted unless includeArchived is true. Omit teamId when this token belongs to one team.",
       inputSchema: listNamedToolSchema,
     },
     async (query) => {

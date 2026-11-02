@@ -72,7 +72,16 @@ export function resolveNeedsCalendar(
   return previous.needsCalendar;
 }
 
-/** Morning queue. Open tasks only: done and cancelled stay out. Schedule is strictly overdue; a delegate follow-up includes due now. */
+/**
+ * Active next action on a project.
+ * `later` is a future or dependent support step, not a front.
+ * Several fronts may be open at once.
+ */
+export function isProjectFront(action: Action): boolean {
+  return action === "do_now" || action === "delegate" || action === "schedule";
+}
+
+/** Morning queue. Open tasks only: done, cancelled, and `later` stay out. Schedule is strictly overdue; a delegate follow-up includes due now. */
 export function inMorningQueue(
   task: {
     status: TaskStatus;
@@ -97,6 +106,7 @@ export function inMorningQueue(
       return !Number.isNaN(createdMs) && createdMs < now.getTime() - FOLLOW_UP_MS;
     }
   }
+  // `later`, including a project's future steps, stays out until the action changes.
   return false;
 }
 
@@ -406,7 +416,7 @@ export const unregisterBotToolSchema = z
   .strict();
 export type UnregisterBotToolInput = z.infer<typeof unregisterBotToolSchema>;
 
-/** A project (multi-step outcome) or an area (life or work domain) on one team. */
+/** An area (life or work domain) on one team. */
 export const namedSummarySchema = z.object({
   id: z.string().uuid(),
   teamId: z.string().uuid(),
@@ -415,12 +425,20 @@ export const namedSummarySchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
 });
-export type ProjectSummary = z.infer<typeof namedSummarySchema>;
-export type AreaSummary = ProjectSummary;
+export type AreaSummary = z.infer<typeof namedSummarySchema>;
+
+/** A project (multi-step outcome). `notes` is the natural-planning sketch, not the step list. */
+export const projectSummarySchema = namedSummarySchema.extend({
+  notes: z.string().nullable(),
+});
+export type ProjectSummary = z.infer<typeof projectSummarySchema>;
+
+const projectNotes = z.string().trim().max(5000).nullable();
 
 export const createProjectSchema = z
   .object({
     name: z.string().trim().min(1).max(120),
+    notes: projectNotes.optional(),
   })
   .strict();
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;
@@ -428,11 +446,12 @@ export type CreateProjectInput = z.infer<typeof createProjectSchema>;
 export const updateProjectSchema = z
   .object({
     name: z.string().trim().min(1).max(120).optional(),
+    notes: projectNotes.optional(),
     archived: z.boolean().optional(),
   })
   .strict()
-  .refine((value) => value.name !== undefined || value.archived !== undefined, {
-    message: "Provide a name or archived.",
+  .refine((value) => value.name !== undefined || value.notes !== undefined || value.archived !== undefined, {
+    message: "Provide a name, notes, or archived.",
   });
 export type UpdateProjectInput = z.infer<typeof updateProjectSchema>;
 
@@ -458,6 +477,20 @@ export const createProjectToolSchema = createProjectSchema.extend({
   teamId: z.string().uuid().optional(),
 });
 export type CreateProjectToolInput = z.infer<typeof createProjectToolSchema>;
+
+export const updateProjectToolSchema = z
+  .object({
+    id: z.string().uuid(),
+    teamId: z.string().uuid().optional(),
+    name: z.string().trim().min(1).max(120).optional(),
+    notes: projectNotes.optional(),
+    archived: z.boolean().optional(),
+  })
+  .strict()
+  .refine((value) => value.name !== undefined || value.notes !== undefined || value.archived !== undefined, {
+    message: "Provide a name, notes, or archived.",
+  });
+export type UpdateProjectToolInput = z.infer<typeof updateProjectToolSchema>;
 
 export const createAreaToolSchema = createAreaSchema.extend({
   teamId: z.string().uuid().optional(),

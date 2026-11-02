@@ -4,6 +4,7 @@ import { Link } from "react-router";
 import { useAuth } from "@/auth";
 import { CompleteDialog } from "@/components/CompleteDialog";
 import { GearIcon, iconButtonClass } from "@/components/Icons";
+import { ProjectsSheet } from "@/components/ProjectsSheet";
 import { TaskDialog } from "@/components/TaskDialog";
 import { TaskRow } from "@/components/TaskRow";
 import { Button } from "@/components/ui/button";
@@ -25,6 +26,8 @@ export function Home() {
   const [editing, setEditing] = useState<{ teamId: string; task: Task | null } | null>(null);
   const [completing, setCompleting] = useState<Task | null>(null);
   const [pickingList, setPickingList] = useState(false);
+  const [projectsOpen, setProjectsOpen] = useState(false);
+  const [taskRevision, setTaskRevision] = useState(0);
   const [creatingHousehold, setCreatingHousehold] = useState(false);
 
   const reload = useCallback(async () => {
@@ -88,14 +91,27 @@ export function Home() {
           <Link to={current ? `/teams/${current.id}` : "/settings"} aria-label="Settings" className={iconButtonClass}>
             <GearIcon />
           </Link>
-          <button
-            type="button"
-            className="w-full truncate pl-[0.42em] text-center text-[10px] font-normal uppercase tracking-[0.42em] text-[#e6e6e6] transition-opacity duration-150 hover:text-white active:opacity-40 disabled:opacity-40"
-            onClick={() => setPickingList(true)}
-            disabled={!current}
-          >
-            {current?.name ?? ""}
-          </button>
+          <div className="flex min-w-0 items-center justify-center">
+            <button
+              type="button"
+              className="min-w-0 truncate pl-[0.42em] text-[10px] font-normal uppercase tracking-[0.42em] text-[#e6e6e6] transition-opacity duration-150 hover:text-white active:opacity-40 disabled:opacity-40"
+              onClick={() => setPickingList(true)}
+              disabled={!current}
+            >
+              {current?.name ?? ""}
+            </button>
+            <span className="shrink-0 px-1.5 text-[#2a2a2a] sm:px-2.5" aria-hidden>
+              /
+            </span>
+            <button
+              type="button"
+              className="shrink-0 pl-[0.28em] text-[10px] font-normal uppercase tracking-[0.28em] text-[#8a8a8a] transition-colors duration-150 hover:text-white active:opacity-40 disabled:opacity-40"
+              onClick={() => setProjectsOpen(true)}
+              disabled={!current}
+            >
+              Projects
+            </button>
+          </div>
           <button type="button" aria-label="New task" onClick={openCreate} className={iconButtonClass}>
             <span aria-hidden className="block -translate-y-px text-[28px] font-extralight leading-none">
               +
@@ -156,6 +172,16 @@ export function Home() {
         </nav>
       </footer>
 
+      {current ? (
+        <ProjectsSheet
+          open={projectsOpen}
+          teamId={current.id}
+          ownerId={user.id}
+          refreshToken={taskRevision}
+          onClose={() => setProjectsOpen(false)}
+          onEditTask={(task) => setEditing({ teamId: current.id, task })}
+        />
+      ) : null}
       {editing ? (
         <TaskDialog
           open
@@ -164,7 +190,10 @@ export function Home() {
           defaultOwnerId={user.id}
           defaultAction={filter}
           onClose={() => setEditing(null)}
-          onSaved={() => void reload()}
+          onSaved={() => {
+            setTaskRevision((revision) => revision + 1);
+            void reload();
+          }}
           onComplete={(task) => {
             setEditing(null);
             setCompleting(task);
@@ -178,6 +207,10 @@ export function Home() {
         currentId={current?.id ?? null}
         onClose={() => setPickingList(false)}
         onChoose={chooseList}
+        onProjects={() => {
+          setPickingList(false);
+          setProjectsOpen(true);
+        }}
         onCreate={() => {
           setPickingList(false);
           setCreatingHousehold(true);
@@ -201,6 +234,7 @@ function ListPicker({
   currentId,
   onClose,
   onChoose,
+  onProjects,
   onCreate,
 }: {
   open: boolean;
@@ -208,6 +242,7 @@ function ListPicker({
   currentId: string | null;
   onClose: () => void;
   onChoose: (id: string) => void;
+  onProjects: () => void;
   onCreate: () => void;
 }) {
   return (
@@ -237,7 +272,15 @@ function ListPicker({
         </ul>
         <button
           type="button"
-          className="mt-16 text-[10px] font-normal uppercase tracking-[0.32em] text-[#8a8a8a] transition-colors duration-150 hover:text-white"
+          className="mt-10 py-3.5 text-left text-[24px] font-light text-[#555] transition-colors duration-200 hover:text-white disabled:opacity-40"
+          onClick={onProjects}
+          disabled={!currentId}
+        >
+          Projects
+        </button>
+        <button
+          type="button"
+          className="mt-8 text-[10px] font-normal uppercase tracking-[0.32em] text-[#8a8a8a] transition-colors duration-150 hover:text-white"
           onClick={onCreate}
         >
           New household

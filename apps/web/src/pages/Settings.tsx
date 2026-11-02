@@ -1,4 +1,4 @@
-import type { AreaSummary, AuthConfig, BotSummary, BotTokenSummary, Member, ProjectSummary, TeamSummary } from "@hearth/shared";
+import type { AreaSummary, AuthConfig, BotSummary, BotTokenSummary, Member, TeamSummary } from "@hearth/shared";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { useAuth } from "@/auth";
@@ -18,7 +18,6 @@ export function Settings() {
   const [members, setMembers] = useState<Member[]>([]);
   const [tokens, setTokens] = useState<BotTokenSummary[]>([]);
   const [bots, setBots] = useState<BotSummary[]>([]);
-  const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [areas, setAreas] = useState<AreaSummary[]>([]);
   const [email, setEmail] = useState("");
   const [agentId, setAgentId] = useState("");
@@ -36,18 +35,16 @@ export function Settings() {
   async function load(id: string) {
     setError(null);
     try {
-      const [detail, tokenList, botList, projectList, areaList] = await Promise.all([
+      const [detail, tokenList, botList, areaList] = await Promise.all([
         api.team(id),
         api.tokens(id),
         api.bots(id),
-        api.projects(id, true),
         api.areas(id, true),
       ]);
       setTeam(detail.team);
       setMembers(detail.members);
       setTokens(tokenList.tokens);
       setBots(botList.bots);
-      setProjects(projectList.projects);
       setAreas(areaList.areas);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not load this team.");
@@ -301,27 +298,8 @@ export function Settings() {
             ) : null}
 
             <Catalogue
-              title="Projects"
-              hint="Outcomes that take more than one step, such as Tara AU returns. Not a domain like House or Finance."
-              placeholder="New project"
-              items={projects}
-              onCreate={async (name) => {
-                await api.createProject(teamId!, name);
-                setNotice("Project saved.");
-                await load(teamId!);
-              }}
-              onArchive={async (id, archived) => {
-                await api.updateProject(teamId!, id, { archived });
-                setNotice(archived ? "Project archived." : "Project restored.");
-                await load(teamId!);
-              }}
-              setError={setError}
-              setNotice={setNotice}
-            />
-
-            <Catalogue
               title="Areas"
-              hint="Domains of life or work, such as House or Finance. Separate from projects."
+              hint="Domains of life or work, such as House or Finance. Projects are separate and open from the list."
               placeholder="New area"
               items={areas}
               onCreate={async (name) => {
@@ -468,7 +446,7 @@ function Catalogue({
   title: string;
   hint: string;
   placeholder: string;
-  items: ProjectSummary[];
+  items: AreaSummary[];
   onCreate: (name: string) => Promise<void>;
   onArchive: (id: string, archived: boolean) => Promise<void>;
   setError: (message: string | null) => void;

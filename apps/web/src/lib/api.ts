@@ -89,9 +89,9 @@ export const api = {
     request<{ projects: ProjectSummary[] }>(
       `/teams/${teamId}/projects${includeArchived ? "?includeArchived=true" : ""}`,
     ),
-  createProject: (teamId: string, name: string) =>
-    request<ProjectSummary>(`/teams/${teamId}/projects`, { method: "POST", body: JSON.stringify({ name }) }),
-  updateProject: (teamId: string, id: string, body: { name?: string; archived?: boolean }) =>
+  createProject: (teamId: string, body: { name: string; notes?: string | null }) =>
+    request<ProjectSummary>(`/teams/${teamId}/projects`, { method: "POST", body: JSON.stringify(body) }),
+  updateProject: (teamId: string, id: string, body: { name?: string; notes?: string | null; archived?: boolean }) =>
     request<ProjectSummary>(`/teams/${teamId}/projects/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   areas: (teamId: string, includeArchived = false) =>
     request<{ areas: AreaSummary[] }>(`/teams/${teamId}/areas${includeArchived ? "?includeArchived=true" : ""}`),
