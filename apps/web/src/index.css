@@ -1,17 +1,7 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
-  --font-serif: "Fraunces", Georgia, "Times New Roman", serif;
-  --color-paper: #efe6d6;
-  --color-sheet: #fbf7f0;
-  --color-ink: #221c16;
-  --color-muted: #6a5e53;
-  --color-line: #e0d5c6;
-  --color-teal: #1c6b62;
-  --color-terracotta: #9c4221;
-  --color-amber: #8a5a00;
-  --color-moss: #3f6212;
+  --font-sans: Inter, "Helvetica Neue", Helvetica, Arial, sans-serif;
 }
 
 html,
@@ -20,14 +10,19 @@ body,
   min-height: 100%;
 }
 
+html {
+  color-scheme: dark;
+  background: #000;
+}
+
 body {
   margin: 0;
-  background:
-    radial-gradient(circle at 10% 0%, rgba(255, 252, 247, 0.8), transparent 28%),
-    radial-gradient(circle at 100% 10%, rgba(156, 66, 33, 0.08), transparent 26%),
-    var(--color-paper);
-  color: var(--color-ink);
+  background: #000;
+  color: #fff;
   font-family: var(--font-sans);
+  font-weight: 400;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 button,
@@ -35,8 +30,29 @@ input,
 textarea,
 select {
   font: inherit;
+  color: inherit;
+}
+
+button:focus-visible,
+a:focus-visible {
+  outline: none;
+  text-decoration-line: underline;
+  text-underline-offset: 4px;
+}
+
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: none;
 }
 
 ::selection {
-  background: #e7c7b4;
+  background: #fff;
+  color: #000;
+}
+
+input:-webkit-autofill {
+  -webkit-text-fill-color: #fff;
+  caret-color: #fff;
+  box-shadow: 0 0 0 1000px #000 inset;
 }

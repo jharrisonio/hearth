@@ -1,19 +1,3 @@
-export function formatDue(iso: string) {
-  return new Intl.DateTimeFormat("en-AU", {
-    day: "numeric",
-    month: "short",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(iso));
-}
-
-export function greeting(name: string) {
-  const hour = new Date().getHours();
-  const part = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
-  const first = name.split(" ")[0] || name;
-  return `${part}, ${first}.`;
-}
-
 export function toLocalInput(iso: string | null) {
   if (!iso) return "";
   const date = new Date(iso);

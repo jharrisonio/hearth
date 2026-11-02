@@ -11,8 +11,8 @@ for (const size of [192, 512]) {
 
 function png(size) {
   const raw = Buffer.alloc((size * 4 + 1) * size);
-  const ink = [34, 28, 22, 255];
-  const cream = [239, 230, 214, 255];
+  const ink = [0, 0, 0, 255];
+  const cream = [255, 255, 255, 255];
   for (let y = 0; y < size; y++) {
     const row = y * (size * 4 + 1);
     raw[row] = 0;

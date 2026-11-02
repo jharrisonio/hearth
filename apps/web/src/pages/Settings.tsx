@@ -1,13 +1,17 @@
-import type { BotTokenSummary, Member, TeamSummary } from "@hearth/shared";
+import type { AuthConfig, BotTokenSummary, Member, TeamSummary } from "@hearth/shared";
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router";
+import { Link, useNavigate, useParams } from "react-router";
 import { useAuth } from "@/auth";
+import { CloseIcon } from "@/components/Icons";
 import { Button } from "@/components/ui/button";
 import { ApiError, api } from "@/lib/api";
+import { fieldClass } from "@/lib/field";
 
 export function Settings() {
   const { teamId } = useParams();
-  const { user } = useAuth();
+  const navigate = useNavigate();
+  const { user, signOut } = useAuth();
+  const [teams, setTeams] = useState<TeamSummary[]>([]);
   const [team, setTeam] = useState<TeamSummary | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [tokens, setTokens] = useState<BotTokenSummary[]>([]);
@@ -18,6 +22,7 @@ export function Settings() {
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [confirmRevoke, setConfirmRevoke] = useState<string | null>(null);
+  const [config, setConfig] = useState<AuthConfig | null>(null);
 
   async function load(id: string) {
     setError(null);
@@ -34,11 +39,37 @@ export function Settings() {
   }
 
   useEffect(() => {
+    let cancelled = false;
+    void api
+      .teams()
+      .then(({ teams: next }) => {
+        if (cancelled) return;
+        setTeams(next);
+        if (!teamId) {
+          const id = next.find((item) => item.kind === "household")?.id ?? next[0]?.id;
+          if (id) navigate(`/teams/${id}`, { replace: true });
+          else setLoading(false);
+        }
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setError(err instanceof ApiError ? err.message : "Could not load your lists.");
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [teamId, navigate]);
+
+  useEffect(() => {
     if (teamId) void load(teamId);
   }, [teamId]);
 
-  if (!teamId) return null;
+  useEffect(() => {
+    void api.config().then(setConfig).catch(() => setConfig(null));
+  }, []);
   const isOwner = team?.role === "owner";
+  const labelClass = "text-[11px] uppercase tracking-[0.16em] text-white/40";
 
   async function addMember(event: React.FormEvent) {
     event.preventDefault();
@@ -81,123 +112,133 @@ export function Settings() {
   }
 
   return (
-    <main className="mx-auto max-w-2xl px-4 py-8 sm:px-6">
-      <Link to="/" className="text-sm text-muted hover:text-ink hover:underline">
-        Back to lists
+    <div className="min-h-dvh bg-black text-white">
+      <Link to="/" aria-label="Close" className="fixed right-8 top-8 z-10 text-white/70 hover:text-white">
+        <CloseIcon />
       </Link>
-      {loading ? <p className="mt-6 text-muted">Loading team…</p> : null}
-      {team ? (
-        <>
-          <p className="mt-4 text-xs uppercase tracking-[0.16em] text-muted">
-            {team.kind === "personal" ? "Personal" : "Household"} · {team.role === "owner" ? "Owner" : "Member"}
-          </p>
-          <h1 className="font-serif text-4xl">{team.name}</h1>
-          <p className="mt-2 text-sm text-muted">Signed in as {user?.name}.</p>
-        </>
-      ) : null}
-      {error ? <p className="mt-4 text-sm text-terracotta">{error}</p> : null}
-      {notice ? <p className="mt-4 text-sm text-moss">{notice}</p> : null}
+      <main className="mx-auto max-w-md px-8 pb-24 pt-24">
+        {loading ? <p className="text-[13px] text-white/40">Loading…</p> : null}
+        {error ? <p className="text-[13px] text-white/70">{error}</p> : null}
+        {notice ? <p className="mt-4 text-[13px] text-white/70">{notice}</p> : null}
 
-      {team ? (
-        <section className="mt-8">
-          <h2 className="font-serif text-2xl">People</h2>
-          {team.kind === "personal" ? (
-            <p className="mt-2 text-sm text-muted">A personal list stays with you. Bots you grant can still post here.</p>
+        <section>
+          <h2 className={labelClass}>Global</h2>
+          <h3 className="mt-8 text-[15px]">Google account</h3>
+          <p className="mt-4 text-[15px]">{user?.name}</p>
+          <p className="mt-1 text-[13px] text-white/45">{user?.email}</p>
+          {config?.google ? (
+            <button
+              type="button"
+              className="mt-6 text-[13px] text-white/70 hover:text-white"
+              onClick={() => (window.location.href = "/api/auth/google")}
+            >
+              Connect Google
+            </button>
           ) : (
-            <p className="mt-2 text-sm text-muted">Members can see and update household tasks. Only an owner can invite or mint tokens.</p>
+            <p className="mt-6 text-[13px] text-white/40">Google sign-in is off.</p>
           )}
-          <ul className="mt-3 divide-y divide-line rounded-2xl border border-line bg-sheet">
-            {members.map((member) => (
-              <li key={member.userId} className="flex items-center justify-between px-4 py-3 text-sm">
-                <span>
-                  {member.name}
-                  <span className="block text-xs text-muted">{member.email}</span>
-                </span>
-                <span className="text-xs uppercase tracking-wide text-muted">{member.role}</span>
-              </li>
-            ))}
-          </ul>
-          {isOwner && team.kind === "household" ? (
-            <form onSubmit={(event) => void addMember(event)} className="mt-3 flex flex-col gap-2 sm:flex-row">
-              <input
-                className="h-10 flex-1 rounded-full border border-line bg-sheet px-4 text-sm outline-none focus:border-teal"
-                type="email"
-                placeholder="Email they already signed in with"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                required
-              />
-              <Button type="submit">Add member</Button>
-            </form>
-          ) : null}
+          <button type="button" className="mt-4 block text-[13px] text-white/45 hover:text-white" onClick={() => void signOut()}>
+            Sign out
+          </button>
         </section>
-      ) : null}
 
-      {team ? (
-        <section className="mt-8">
-          <h2 className="font-serif text-2xl">Bot tokens</h2>
-          <p className="mt-2 text-sm text-muted">
-            A token is scoped to this team. Send it as <code>Authorization: Bearer …</code>. The secret is shown once.
-          </p>
-          {secret ? (
-            <div className="mt-3 rounded-2xl border border-teal/30 bg-teal/5 p-4">
-              <p className="text-sm font-medium">Shown once. Copy it now — it cannot be retrieved later.</p>
-              <pre className="mt-2 overflow-x-auto rounded-xl bg-ink px-3 py-2 text-xs text-sheet">{secret}</pre>
-              <Button
-                className="mt-3"
-                size="sm"
-                variant="secondary"
-                onClick={() => void navigator.clipboard.writeText(secret)}
-              >
-                Copy token
-              </Button>
-            </div>
-          ) : null}
-          <ul className="mt-3 divide-y divide-line rounded-2xl border border-line bg-sheet">
-            {tokens.length === 0 ? <li className="px-4 py-3 text-sm text-muted">No tokens yet.</li> : null}
-            {tokens.map((token) => (
-              <li key={token.id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-sm">
-                <span>
-                  {token.label}
-                  <span className="block text-xs text-muted">
-                    {token.prefix}… {token.revokedAt ? "· revoked" : ""}
+        {team ? (
+          <section className="mt-16">
+            <h2 className={labelClass}>Current list</h2>
+            <h3 className="mt-8 text-[15px]">{team.name}</h3>
+            <p className="mt-2 text-[13px] text-white/40">
+              {team.kind === "personal" ? "Personal" : "Household"} / {team.role === "owner" ? "Owner" : "Member"}
+            </p>
+            <h4 className={`mt-10 ${labelClass}`}>Members</h4>
+            <p className="mt-3 text-[13px] text-white/45">
+              {team.kind === "personal"
+                ? "A personal list stays with you. Bots you grant can still post here."
+                : "Members can see and update household tasks. Only an owner can invite or mint tokens."}
+            </p>
+            <ul className="mt-6 space-y-4">
+              {members.map((member) => (
+                <li key={member.userId} className="text-[15px]">
+                  {member.name}
+                  <span className="mt-1 block text-[12px] text-white/40">{member.email}</span>
+                  <span className={`mt-1 block ${labelClass}`}>{member.role}</span>
+                </li>
+              ))}
+            </ul>
+            {isOwner && team.kind === "household" ? (
+              <form onSubmit={(event) => void addMember(event)} className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-end">
+                <label className={`block flex-1 ${labelClass}`}>
+                  Email
+                  <input
+                    className={fieldClass}
+                    type="email"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    required
+                  />
+                </label>
+                <Button type="submit">Add member</Button>
+              </form>
+            ) : null}
+            <h4 className={`mt-12 ${labelClass}`}>Bot tokens</h4>
+            <p className="mt-3 text-[13px] text-white/45">
+              A token is scoped to this team. Send it as <code>Authorization: Bearer …</code>. The secret is shown once.
+            </p>
+            {secret ? (
+              <div className="mt-6 border-y border-white/15 py-4">
+                <p className="text-[13px] text-white/70">Shown once. Copy it now.</p>
+                <pre className="mt-3 overflow-x-auto text-[12px] text-white">{secret}</pre>
+                <button
+                  type="button"
+                  className="mt-3 text-[12px] uppercase tracking-[0.14em] text-white/50 hover:text-white"
+                  onClick={() => void navigator.clipboard.writeText(secret)}
+                >
+                  Copy
+                </button>
+              </div>
+            ) : null}
+            <ul className="mt-6 space-y-4">
+              {tokens.length === 0 ? <li className="text-[13px] text-white/35">No tokens yet.</li> : null}
+              {tokens.map((token) => (
+                <li key={token.id} className="flex flex-wrap items-baseline justify-between gap-3 text-[15px]">
+                  <span>
+                    {token.label}
+                    <span className="mt-1 block text-[12px] text-white/40">
+                      {token.prefix}… {token.revokedAt ? "· revoked" : ""}
+                    </span>
                   </span>
-                </span>
-                {isOwner && !token.revokedAt ? (
-                  confirmRevoke === token.id ? (
-                    <span className="flex gap-2">
-                      <Button size="sm" variant="danger" onClick={() => void revoke(token.id)}>
+                  {isOwner && !token.revokedAt ? (
+                    confirmRevoke === token.id ? (
+                      <span className="flex gap-4">
+                        <Button size="sm" variant="danger" onClick={() => void revoke(token.id)}>
+                          Revoke
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setConfirmRevoke(null)}>
+                          Cancel
+                        </Button>
+                      </span>
+                    ) : (
+                      <Button size="sm" variant="ghost" onClick={() => setConfirmRevoke(token.id)}>
                         Revoke
                       </Button>
-                      <Button size="sm" variant="ghost" onClick={() => setConfirmRevoke(null)}>
-                        Cancel
-                      </Button>
-                    </span>
-                  ) : (
-                    <Button size="sm" variant="ghost" onClick={() => setConfirmRevoke(token.id)}>
-                      Revoke
-                    </Button>
-                  )
-                ) : null}
-              </li>
-            ))}
-          </ul>
-          {isOwner ? (
-            <form onSubmit={(event) => void createToken(event)} className="mt-3 flex flex-col gap-2 sm:flex-row">
-              <input
-                className="h-10 flex-1 rounded-full border border-line bg-sheet px-4 text-sm outline-none focus:border-teal"
-                placeholder="Label, e.g. kitchen bot"
-                value={label}
-                onChange={(event) => setLabel(event.target.value)}
-                required
-              />
-              <Button type="submit">Create token</Button>
-            </form>
-          ) : (
-            <p className="mt-3 text-sm text-muted">Ask an owner if you need a new token.</p>
-          )}
-        </section>
-      ) : null}
-    </main>
+                    )
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+            {isOwner ? (
+              <form onSubmit={(event) => void createToken(event)} className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-end">
+                <label className={`block flex-1 ${labelClass}`}>
+                  Label
+                  <input className={fieldClass} value={label} onChange={(event) => setLabel(event.target.value)} required />
+                </label>
+                <Button type="submit">Create token</Button>
+              </form>
+            ) : (
+              <p className="mt-6 text-[13px] text-white/40">Ask an owner if you need a new token.</p>
+            )}
+          </section>
+        ) : null}
+      </main>
+    </div>
   );
 }

@@ -1,31 +1,30 @@
 import type { Action, BotTokenSummary, Member, Task } from "@hearth/shared";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { actionLabel, axesFor } from "@/lib/action";
 import { ApiError, api } from "@/lib/api";
+import { fieldClass } from "@/lib/field";
 import { fromLocalInput, ownerKey, parseOwnerKey, toLocalInput } from "@/lib/format";
-
-const fieldClass =
-  "mt-1 w-full rounded-xl border border-line bg-white/70 px-3 py-2 text-sm outline-none focus:border-teal";
 
 export function TaskDialog({
   open,
   teamId,
   task,
-  members,
-  tokens,
   defaultOwnerId,
+  defaultAction,
   onClose,
   onSaved,
+  onComplete,
 }: {
   open: boolean;
   teamId: string;
   task: Task | null;
-  members: Member[];
-  tokens: BotTokenSummary[];
   defaultOwnerId: string;
+  defaultAction: Action;
   onClose: () => void;
   onSaved: () => void;
+  onComplete: (task: Task) => void;
 }) {
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
@@ -33,13 +32,13 @@ export function TaskDialog({
         {open ? (
           <TaskForm
             key={task?.id ?? "new"}
-            teamId={teamId}
+            teamId={task?.teamId ?? teamId}
             task={task}
-            members={members}
-            tokens={tokens}
             defaultOwnerId={defaultOwnerId}
+            defaultAction={defaultAction}
             onClose={onClose}
             onSaved={onSaved}
+            onComplete={onComplete}
           />
         ) : null}
       </DialogContent>
@@ -50,35 +49,53 @@ export function TaskDialog({
 function TaskForm({
   teamId,
   task,
-  members,
-  tokens,
   defaultOwnerId,
+  defaultAction,
   onClose,
   onSaved,
+  onComplete,
 }: {
   teamId: string;
   task: Task | null;
-  members: Member[];
-  tokens: BotTokenSummary[];
   defaultOwnerId: string;
+  defaultAction: Action;
   onClose: () => void;
   onSaved: () => void;
+  onComplete: (task: Task) => void;
 }) {
-  const activeTokens = tokens.filter((token) => token.revokedAt == null || token.id === task?.owner.id);
+  const seeded = task ? { important: task.important, urgent: task.urgent } : axesFor(defaultAction);
+  const [members, setMembers] = useState<Member[]>([]);
+  const [tokens, setTokens] = useState<BotTokenSummary[]>([]);
   const [title, setTitle] = useState(task?.title ?? "");
   const [detail, setDetail] = useState(task?.detail ?? "");
-  const [action, setAction] = useState<Action>(task?.action ?? "do_now");
+  const [action, setAction] = useState<Action>(task?.action ?? defaultAction);
   const [waitingOn, setWaitingOn] = useState(task?.waitingOn ?? "");
   const [calendarEventId, setCalendarEventId] = useState(task?.calendarEventId ?? "");
   const [project, setProject] = useState(task?.project ?? "");
   const [dueAt, setDueAt] = useState(toLocalInput(task?.dueAt ?? null));
-  const [important, setImportant] = useState(task?.important ?? false);
-  const [urgent, setUrgent] = useState(task?.urgent ?? false);
-  const [owner, setOwner] = useState(
-    task ? ownerKey(task.owner.type, task.owner.id) : ownerKey("user", defaultOwnerId),
-  );
+  const [important, setImportant] = useState(seeded.important);
+  const [urgent, setUrgent] = useState(seeded.urgent);
+  const [owner, setOwner] = useState(task ? ownerKey(task.owner.type, task.owner.id) : ownerKey("user", defaultOwnerId));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const activeTokens = tokens.filter((token) => token.revokedAt == null || token.id === task?.owner.id);
+
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all([api.team(teamId), api.tokens(teamId)])
+      .then(([detail, tokenList]) => {
+        if (cancelled) return;
+        setMembers(detail.members);
+        setTokens(tokenList.tokens);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setError(err instanceof ApiError ? err.message : "Could not load this list.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [teamId]);
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -121,117 +138,96 @@ function TaskForm({
     }
   }
 
+  const label = "text-[11px] uppercase tracking-[0.16em] text-white/45";
+
   return (
     <form onSubmit={(event) => void onSubmit(event)}>
-      <DialogTitle>{task ? "Edit task" : "New task"}</DialogTitle>
-      <DialogDescription>
-        {task?.status === "done"
-          ? "Done tasks stay done. The outcome is kept."
-          : "Important and urgent are separate. The queue sorts them for you."}
+      <DialogTitle>{task ? "Edit" : "New"}</DialogTitle>
+      <DialogDescription className="sr-only">
+        Important and urgent choose do now, delegate, schedule, or later.
       </DialogDescription>
-      <label className="mt-4 block text-sm">
+      <label className="mt-6 block text-[11px] uppercase tracking-[0.16em] text-white/45">
         Title
-        <input className={fieldClass} value={title} onChange={(event) => setTitle(event.target.value)} required />
+        <input className={fieldClass} value={title} onChange={(event) => setTitle(event.target.value)} autoFocus required />
       </label>
-      <label className="mt-3 block text-sm">
-        Detail
-        <textarea className={fieldClass} rows={3} value={detail} onChange={(event) => setDetail(event.target.value)} />
-      </label>
-      <div className="mt-3 grid gap-3 sm:grid-cols-2">
-        <label className="text-sm">
-          Action
-          <select className={fieldClass} value={action} onChange={(event) => setAction(event.target.value as Action)}>
-            <option value="do_now">Do now</option>
-            <option value="delegate">Delegate</option>
-            <option value="schedule">Schedule</option>
-            <option value="later">Later</option>
-          </select>
-        </label>
-        <label className="text-sm">
-          Owner
-          <select className={fieldClass} value={owner} onChange={(event) => setOwner(event.target.value)}>
-            {members.map((member) => (
-              <option key={member.userId} value={ownerKey("user", member.userId)}>
-                {member.name}
-              </option>
-            ))}
-            {activeTokens.map((token) => (
-              <option key={token.id} value={ownerKey("bot", token.id)}>
-                {token.label}
-                {token.revokedAt ? " (revoked)" : ""}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-      {action === "delegate" ? (
-        <label className="mt-3 block text-sm">
-          Waiting on
-          <input
-            className={fieldClass}
-            value={waitingOn}
-            onChange={(event) => setWaitingOn(event.target.value)}
-            placeholder="Who has this, or what you need back"
-            required
-          />
-        </label>
-      ) : null}
-      {action === "schedule" ? (
-        <div className="mt-3">
-          <label className="block text-sm">
-            Calendar event id
-            <input
-              className={fieldClass}
-              value={calendarEventId}
-              onChange={(event) => setCalendarEventId(event.target.value)}
-              placeholder="Leave blank if it is not on the calendar yet"
-            />
-          </label>
-          <p className="mt-1 text-xs text-muted">
-            {calendarEventId.trim()
-              ? "Linked. It leaves the morning queue until the due date."
-              : "Needs a calendar. It stays on the morning queue until an event id is saved."}
-          </p>
-        </div>
-      ) : null}
-      <div className="mt-3 grid gap-3 sm:grid-cols-2">
-        <label className="text-sm">
-          Project
-          <input className={fieldClass} value={project} onChange={(event) => setProject(event.target.value)} placeholder="Kitchen, Admin…" />
-        </label>
-        <label className="text-sm">
-          {action === "delegate" ? "Follow-up" : "Due"}
-          <input className={fieldClass} type="datetime-local" value={dueAt} onChange={(event) => setDueAt(event.target.value)} />
-        </label>
-      </div>
-      {action === "delegate" ? (
-        <p className="mt-1 text-xs text-muted">
-          {task
-            ? "This is the follow-up. Clear it and the task returns to the morning queue after three days."
-            : "This is the follow-up. Leave it blank to nudge you in three days."}
-        </p>
-      ) : null}
-      <div className="mt-3 flex gap-4 text-sm">
+      <div className="mt-6 flex gap-6 text-[13px]">
         <label className="inline-flex items-center gap-2">
-          <input type="checkbox" checked={important} onChange={(event) => setImportant(event.target.checked)} />
+          <input type="checkbox" className="accent-white" checked={important} onChange={(event) => setImportant(event.target.checked)} />
           Important
         </label>
         <label className="inline-flex items-center gap-2">
-          <input type="checkbox" checked={urgent} onChange={(event) => setUrgent(event.target.checked)} />
+          <input type="checkbox" className="accent-white" checked={urgent} onChange={(event) => setUrgent(event.target.checked)} />
           Urgent
         </label>
       </div>
-      {task?.status === "done" && task.outcome ? (
-        <p className="mt-3 text-sm text-moss">Outcome: {task.outcome}</p>
+      <label className={`mt-6 block ${label}`}>
+        Action
+        <select className={fieldClass} value={action} onChange={(event) => setAction(event.target.value as Action)}>
+          <option value="do_now">Do now</option>
+          <option value="delegate">Delegate</option>
+          <option value="schedule">Schedule</option>
+          <option value="later">Later</option>
+        </select>
+      </label>
+      <p className="mt-3 text-[11px] uppercase tracking-[0.18em] text-white/70">{actionLabel[action]}</p>
+      {action === "delegate" ? (
+        <label className={`mt-6 block ${label}`}>
+          Waiting on
+          <input className={fieldClass} value={waitingOn} onChange={(event) => setWaitingOn(event.target.value)} required />
+        </label>
       ) : null}
-      {error ? <p className="mt-3 text-sm text-terracotta">{error}</p> : null}
-      <div className="mt-5 flex justify-end gap-2">
-        <Button type="button" variant="secondary" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button type="submit" disabled={saving}>
-          {saving ? "Saving…" : task ? "Save" : "Add task"}
-        </Button>
+      {action === "schedule" ? (
+        <label className={`mt-6 block ${label}`}>
+          Calendar event id
+          <input className={fieldClass} value={calendarEventId} onChange={(event) => setCalendarEventId(event.target.value)} />
+        </label>
+      ) : null}
+      <label className={`mt-6 block ${label}`}>
+        {action === "delegate" ? "Follow-up" : "Due"}
+        <input className={fieldClass} type="datetime-local" value={dueAt} onChange={(event) => setDueAt(event.target.value)} />
+      </label>
+      <label className={`mt-6 block ${label}`}>
+        Owner
+        <select className={fieldClass} value={owner} onChange={(event) => setOwner(event.target.value)}>
+          {members.map((member) => (
+            <option key={member.userId} value={ownerKey("user", member.userId)}>
+              {member.name}
+            </option>
+          ))}
+          {activeTokens.map((token) => (
+            <option key={token.id} value={ownerKey("bot", token.id)}>
+              {token.label}
+              {token.revokedAt ? " (revoked)" : ""}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className={`mt-6 block ${label}`}>
+        Project
+        <input className={fieldClass} value={project} onChange={(event) => setProject(event.target.value)} />
+      </label>
+      <label className={`mt-6 block ${label}`}>
+        Detail
+        <textarea className={fieldClass} rows={2} value={detail} onChange={(event) => setDetail(event.target.value)} />
+      </label>
+      {task?.status === "done" && task.outcome ? <p className="mt-6 text-[13px] text-white/60">Outcome: {task.outcome}</p> : null}
+      {error ? <p className="mt-4 text-[13px] text-white/70">{error}</p> : null}
+      <div className="sticky bottom-0 mt-8 flex items-center justify-between gap-4 bg-black py-4">
+        {task && task.status === "open" ? (
+          <button type="button" className="text-[13px] text-white/50 hover:text-white" onClick={() => onComplete(task)}>
+            Mark done
+          </button>
+        ) : (
+          <span />
+        )}
+        <div className="flex gap-5">
+          <Button type="button" variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={saving}>
+            {saving ? "Saving…" : task ? "Save" : "Add"}
+          </Button>
+        </div>
       </div>
     </form>
   );
