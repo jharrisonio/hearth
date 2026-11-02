@@ -14,6 +14,7 @@ import {
   followUpFrom,
   inMorningQueue,
   isHttpUrl,
+  listTasksQuerySchema,
   resolveNeedsCalendar,
   suggestAction,
   updateTaskSchema,
@@ -176,6 +177,20 @@ function checkMigrationSql() {
   );
   const journal = readFileSync(new URL("../apps/api/drizzle/meta/_journal.json", import.meta.url), "utf8");
   assert(journal.includes("0001_action"), "journal lists the action migration");
+  assert(journal.includes("0005_projects"), "journal lists the projects migration");
+  const projectsSql = readFileSync(new URL("../apps/api/drizzle/0005_projects.sql", import.meta.url), "utf8");
+  assert(projectsSql.includes('DROP COLUMN "project"'), "free-text project column is dropped");
+  assert(projectsSql.includes("('house')") && projectsSql.includes("('finance')"), "area names are not migrated into projects");
+  assert(!createTaskSchema.safeParse({ teamId, title: "Nope", project: "Kitchen" }).success, "create rejects the free-text project");
+  assert(!updateTaskSchema.safeParse({ project: "Kitchen" }).success, "update rejects the free-text project");
+  assert(!listTasksQuerySchema.safeParse({ project: "Kitchen" }).success, "list rejects the free-text project filter");
+  const linked = createTaskSchema.parse({
+    teamId,
+    title: "Tara AU returns",
+    projectId: "22222222-2222-4222-8222-222222222222",
+    areaId: null,
+  });
+  assert(linked.projectId === "22222222-2222-4222-8222-222222222222" && linked.areaId === null, "tasks link by id");
 }
 
 try {

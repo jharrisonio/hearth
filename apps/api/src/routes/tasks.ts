@@ -28,8 +28,9 @@ import { blankToNull, HttpError, parseBody } from "../errors.js";
 import { publishTaskEvent } from "../events.js";
 import { readJson, requireUuid } from "../http.js";
 import { parseIdempotencyKey, withCreateIdempotency } from "../idempotency.js";
+import { assertNamedOnTeam } from "../catalog.js";
 import { tasks } from "../schema.js";
-import { toTask } from "../task-json.js";
+import { loadTaskView, taskViews, viewTask } from "../task-json.js";
 
 const BLOCKED_UPDATE = new Set([
   "status",
@@ -50,9 +51,7 @@ taskRoutes.get("/do-immediately", async (c) => {
   const teamId = optionalUuid(c.req.query("teamId"), "teamId");
   const ids = await teamIdsFor(actor, teamId);
   if (ids.length === 0) return c.json({ tasks: [] });
-  const rows = await db
-    .select()
-    .from(tasks)
+  const rows = await taskViews()
     .where(and(inArray(tasks.teamId, ids), eq(tasks.status, "open"), morningQueueFilter()))
     .orderBy(
       sql`CASE WHEN ${tasks.important} AND ${tasks.urgent} THEN 0 WHEN ${tasks.important} THEN 1 WHEN ${tasks.urgent} THEN 2 ELSE 3 END`,
@@ -60,7 +59,7 @@ taskRoutes.get("/do-immediately", async (c) => {
       desc(tasks.updatedAt),
     )
     .limit(100);
-  return c.json({ tasks: rows.map(toTask) });
+  return c.json({ tasks: rows.map(viewTask) });
 });
 
 taskRoutes.get("/", async (c) => {
@@ -84,8 +83,15 @@ taskRoutes.get("/", async (c) => {
   if (important !== undefined) filters.push(eq(tasks.important, important));
   if (urgent !== undefined) filters.push(eq(tasks.urgent, urgent));
   if (query.project !== undefined) {
-    if (query.project.length > 120) throw new HttpError(400, "invalid_query", "project is too long.");
-    filters.push(eq(tasks.project, query.project));
+    throw new HttpError(400, "invalid_query", "project has been removed. Filter with projectId.");
+  }
+  if (query.projectId !== undefined) {
+    requireUuid(query.projectId, "projectId");
+    filters.push(eq(tasks.projectId, query.projectId));
+  }
+  if (query.areaId !== undefined) {
+    requireUuid(query.areaId, "areaId");
+    filters.push(eq(tasks.areaId, query.areaId));
   }
   if (query.dueBefore !== undefined) {
     const due = new Date(query.dueBefore);
@@ -105,13 +111,11 @@ taskRoutes.get("/", async (c) => {
     filters.push(eq(tasks.ownerId, actor.id));
   }
 
-  const rows = await db
-    .select()
-    .from(tasks)
+  const rows = await taskViews()
     .where(and(...filters))
     .orderBy(desc(tasks.updatedAt), desc(tasks.createdAt))
     .limit(200);
-  return c.json({ tasks: rows.map(toTask) });
+  return c.json({ tasks: rows.map(viewTask) });
 });
 
 taskRoutes.post("/", async (c) => {
@@ -121,12 +125,14 @@ taskRoutes.post("/", async (c) => {
   await requireTeam(actor, body.teamId);
   const values = taskInsertValues(actor, body, new Date());
   await assertOwnerOnTeam(body.teamId, values.owner);
+  await assertLinks(body.teamId, values.row.projectId, values.row.areaId);
   const { row, replayed } = await withCreateIdempotency(actor, key, body, async (tx) => {
     const [inserted] = await tx.insert(tasks).values(values.row).returning();
     if (!inserted) throw new Error("Failed to create task");
     return inserted;
   });
-  const task = toTask(row);
+  const task = await loadTaskView(row.id);
+  if (!task) throw new HttpError(404, "not_found", "Task not found.");
   if (replayed) {
     c.header("Idempotent-Replayed", "true");
     return c.json(task, 200);
@@ -177,6 +183,10 @@ taskRoutes.patch("/:id", async (c) => {
   });
   const owner: ActorRef = body.owner ?? { type: existing.ownerType, id: existing.ownerId };
   if (body.owner) await assertOwnerOnTeam(existing.teamId, owner);
+  const projectId = body.projectId !== undefined ? body.projectId : existing.projectId;
+  const areaId = body.areaId !== undefined ? body.areaId : existing.areaId;
+  if (body.projectId) await assertNamedOnTeam("project", existing.teamId, body.projectId);
+  if (body.areaId) await assertNamedOnTeam("area", existing.teamId, body.areaId);
 
   const [row] = await db
     .update(tasks)
@@ -191,7 +201,8 @@ taskRoutes.patch("/:id", async (c) => {
       waitingOn,
       calendarEventId,
       needsCalendar,
-      project: body.project !== undefined ? blankToNull(body.project) ?? null : existing.project,
+      projectId,
+      areaId,
       source: body.source !== undefined ? body.source : existing.source,
       dueAt: body.dueAt !== undefined ? parseDue(body.dueAt) : existing.dueAt,
       updatedAt: new Date(),
@@ -199,7 +210,8 @@ taskRoutes.patch("/:id", async (c) => {
     .where(eq(tasks.id, id))
     .returning();
   if (!row) throw new HttpError(404, "not_found", "Task not found.");
-  const task = toTask(row);
+  const task = await loadTaskView(row.id);
+  if (!task) throw new HttpError(404, "not_found", "Task not found.");
   await publishTaskEvent("updated", task);
   return c.json(task);
 });
@@ -225,7 +237,8 @@ taskRoutes.post("/:id/complete", async (c) => {
     .where(eq(tasks.id, id))
     .returning();
   if (!row) throw new HttpError(404, "not_found", "Task not found.");
-  const task = toTask(row);
+  const task = await loadTaskView(row.id);
+  if (!task) throw new HttpError(404, "not_found", "Task not found.");
   await publishTaskEvent("completed", task);
   return c.json(task);
 });
@@ -260,7 +273,8 @@ function taskInsertValues(actor: Actor, body: CreateTaskInput, now: Date) {
       waitingOn,
       calendarEventId,
       needsCalendar,
-      project: blankToNull(body.project) ?? null,
+      projectId: body.projectId ?? null,
+      areaId: body.areaId ?? null,
       source: body.source ?? null,
       dueAt,
       createdAt: now,
@@ -269,6 +283,11 @@ function taskInsertValues(actor: Actor, body: CreateTaskInput, now: Date) {
       createdById: actor.id,
     },
   };
+}
+
+async function assertLinks(teamId: string, projectId: string | null, areaId: string | null) {
+  if (projectId) await assertNamedOnTeam("project", teamId, projectId);
+  if (areaId) await assertNamedOnTeam("area", teamId, areaId);
 }
 
 function assertDelegate(action: Action, waitingOn: string | null) {

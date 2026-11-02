@@ -10,6 +10,11 @@ export function TaskRow({ task, onOpen }: { task: Task; onOpen: () => void }) {
       >
         {task.title}
         <span className="pointer-events-none absolute inset-x-0 bottom-2 h-px origin-left scale-x-0 bg-white transition-transform duration-[250ms] ease-[cubic-bezier(0.2,0.6,0.2,1)] group-hover:scale-x-100" />
+        {task.project || task.area ? (
+          <span className="mt-1 block text-[10px] font-normal uppercase tracking-[0.28em] text-[#5c5c5c]">
+            {[task.project?.name, task.area?.name].filter(Boolean).join(" · ")}
+          </span>
+        ) : null}
       </button>
     </li>
   );

@@ -1,6 +1,7 @@
 import type { Action } from "@hearth/shared";
 import { and, count, eq } from "drizzle-orm";
 import { ensurePersonalTeam, findUserByEmail } from "./accounts.js";
+import { createNamed } from "./catalog.js";
 import { db } from "./db.js";
 import { memberships, tasks, teams, users } from "./schema.js";
 
@@ -64,10 +65,16 @@ async function seedTasks(
   naomiTeamId: string,
   householdId: string,
 ) {
+  const kitchen = await namedId("area", householdId, "Kitchen");
+  const house = await namedId("area", householdId, "House");
+  const shed = await namedId("area", householdId, "Shed");
+  const boiler = await namedId("project", householdId, "Boiler service");
+  const admin = await namedId("area", jamesTeamId, "Admin");
+  const errands = await namedId("area", naomiTeamId, "Errands");
   await insertIfEmpty(householdId, [
     task(householdId, jamesId, {
       title: "Buy oat milk",
-      project: "Kitchen",
+      areaId: kitchen,
       important: true,
       urgent: true,
       action: "do_now",
@@ -75,7 +82,8 @@ async function seedTasks(
     }),
     task(householdId, naomiId, {
       title: "Book the boiler service",
-      project: "House",
+      areaId: house,
+      projectId: boiler,
       important: true,
       urgent: false,
       action: "delegate",
@@ -83,7 +91,7 @@ async function seedTasks(
     }),
     task(householdId, jamesId, {
       title: "Sort the camping gear",
-      project: "Shed",
+      areaId: shed,
       important: false,
       urgent: false,
       action: "later",
@@ -92,7 +100,7 @@ async function seedTasks(
   await insertIfEmpty(jamesTeamId, [
     task(jamesTeamId, jamesId, {
       title: "Send the rates notice",
-      project: "Admin",
+      areaId: admin,
       important: true,
       urgent: false,
       action: "do_now",
@@ -102,7 +110,7 @@ async function seedTasks(
   await insertIfEmpty(naomiTeamId, [
     task(naomiTeamId, naomiId, {
       title: "Return the library book",
-      project: "Errands",
+      areaId: errands,
       important: false,
       urgent: true,
       action: "do_now",
@@ -111,12 +119,18 @@ async function seedTasks(
   ]);
 }
 
+async function namedId(kind: "project" | "area", teamId: string, name: string) {
+  const { row } = await createNamed(kind, teamId, name);
+  return row.id;
+}
+
 function task(
   teamId: string,
   userId: string,
   fields: {
     title: string;
-    project: string;
+    projectId?: string;
+    areaId?: string;
     important: boolean;
     urgent: boolean;
     action: Action;
@@ -129,7 +143,8 @@ function task(
   return {
     teamId,
     title: fields.title,
-    project: fields.project,
+    projectId: fields.projectId ?? null,
+    areaId: fields.areaId ?? null,
     important: fields.important,
     urgent: fields.urgent,
     action: fields.action,

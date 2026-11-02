@@ -135,7 +135,8 @@ A task:
   "waitingOn": null,
   "calendarEventId": null,
   "needsCalendar": false,
-  "project": "Kitchen",
+  "project": { "id": "…", "name": "Boiler service" },
+  "area": { "id": "…", "name": "House" },
   "source": null,
   "dueAt": "2026-11-02T00:00:00.000Z",
   "outcome": null,
@@ -151,6 +152,8 @@ A task:
 `waitingOn` is required when `action` is `delegate`. On create, omit `dueAt` for a delegated task and the follow-up is set three days ahead. That date is the nudge. Sending `dueAt: null` stores no follow-up; the task joins the morning queue once it is more than three days old. `outcome` is required when the task is completed.
 
 `calendarEventId` is an optional calendar event id. The server keeps `needsCalendar` in line with it: a `schedule` task with no id is stored with `needsCalendar` true, and any id forces `needsCalendar` false. You can omit `needsCalendar`.
+
+`project` and `area` are `{ "id", "name" }` or null. A project is a multi-step outcome. An area is a life or work domain, such as House or Finance. They are separate. Set them with `projectId` and `areaId` (a uuid on that team, or null to clear). Omit either on update to leave it unchanged. The old free-text `project` string is rejected.
 
 `source` is an optional link back to where the task came from. It is `null`, or:
 
@@ -171,11 +174,13 @@ For Gmail, `href` is the thread URL from the Gmail address bar: `https://mail.go
 
 `create_task` and `update_task` take this same `source`. `list_tasks`, `GET /tasks`, `GET /tasks/do-immediately`, create, update, complete, and the SSE `task` object all include it.
 
-`GET /tasks` query: `teamId`, `action`, `status` (`open` or `done`), `important`, `urgent`, `owner` (`user:<uuid>` or `bot:<uuid>`), `dueBefore`, `project`, `mine`. `lane` is rejected. Humans who omit `teamId` get every team they belong to. A bot who omits `teamId` is limited to its token's team. Passing another team returns 403.
+`GET /tasks` query: `teamId`, `action`, `status` (`open` or `done`), `important`, `urgent`, `owner` (`user:<uuid>` or `bot:<uuid>`), `dueBefore`, `projectId`, `areaId`, `mine`. `lane` is rejected, and so is the old `project` string. Humans who omit `teamId` get every team they belong to. A bot who omits `teamId` is limited to its token's team. Passing another team returns 403.
 
 `GET /tasks/do-immediately` returns open tasks that are `do_now`, or `schedule` and still need a calendar or have a `dueAt` in the past, or `delegate` with a follow-up at or before now (or no `dueAt` and `createdAt` more than three days ago). Optional `teamId`. Order: important and urgent, then important, then urgent, then the rest; within that, `dueAt` ascending with nulls last; then `updatedAt` descending.
 
-Other routes humans use from the app: `GET /auth/config`, `POST /auth/dev`, `GET /auth/google`, `GET /auth/me`, `POST /auth/logout`, `GET /teams`, `POST /teams`, `GET /teams/:id`, `GET /teams/:id/events`, `POST /teams/:id/members`, `GET|POST /teams/:id/bots`, `DELETE /teams/:id/bots/:botId`, `GET|POST /teams/:id/tokens`, `DELETE /teams/:id/tokens/:tokenId`.
+Other routes humans use from the app: `GET /auth/config`, `POST /auth/dev`, `GET /auth/google`, `GET /auth/me`, `POST /auth/logout`, `GET /teams`, `POST /teams`, `GET /teams/:id`, `GET /teams/:id/events`, `POST /teams/:id/members`, `GET|POST /teams/:id/bots`, `DELETE /teams/:id/bots/:botId`, `GET|POST /teams/:id/projects`, `PATCH /teams/:id/projects/:projectId`, `GET|POST /teams/:id/areas`, `PATCH /teams/:id/areas/:areaId`, `GET|POST /teams/:id/tokens`, `DELETE /teams/:id/tokens/:tokenId`.
+
+`POST` for a project or area takes `{ "name": "…" }`. The same name on that team returns the existing row (200) and restores it if it was archived. A new row is 201. `PATCH` takes `name` and/or `archived`. `GET` omits archived rows unless `includeArchived=true`. Archived links stay on tasks until cleared.
 
 ### curl
 
@@ -193,7 +198,7 @@ Create, update, and complete. `TEAM` and `TASK` come from the previous responses
 
 ```bash
 curl -sS -b /tmp/hearth.cj -H 'content-type: application/json' \
-  -d '{"teamId":"TEAM","title":"Buy oat milk","important":true,"urgent":true,"action":"do_now","project":"Kitchen"}' \
+  -d '{"teamId":"TEAM","title":"Buy oat milk","important":true,"urgent":true,"action":"do_now","projectId":"PROJECT","areaId":"AREA"}' \
   http://127.0.0.1:43124/tasks
 
 curl -sS -b /tmp/hearth.cj -X PATCH -H 'content-type: application/json' \
@@ -278,7 +283,7 @@ The web nginx proxy turns off response buffering for `/api/` and waits up to 15 
 
 The API serves a stateless MCP endpoint at `POST /mcp` (Streamable HTTP, JSON responses, no SSE stream). Other methods get 405. Auth is the bot Bearer token, the same `Authorization: Bearer hth_…` header as the REST API. A session cookie is not accepted here.
 
-Tools call the task routes above: `create_task` (pass `idempotencyKey`; it is sent as `Idempotency-Key`; `owner` can be a registered bot; `source` is the email or URL link), `update_task` (`source: null` clears the link), `complete_task`, `list_tasks`, and `list_do_immediately`. List filters match `GET /tasks`. Returned tasks include `source`. `register_bot`, `list_bots`, and `unregister_bot` manage bot owners. Omit `teamId` on those when the token belongs to one team.
+Tools call the task routes above: `create_task` (pass `idempotencyKey`; it is sent as `Idempotency-Key`; `owner` can be a registered bot; `projectId` and `areaId` link a project or an area; `source` is the email or URL link), `update_task` (null clears a project, area, or source link), `complete_task`, `list_tasks`, and `list_do_immediately`. List filters match `GET /tasks`. Returned tasks include `source`, `project`, and `area`. `create_project`, `list_projects`, `create_area`, and `list_areas` manage the two catalogs. `register_bot`, `list_bots`, and `unregister_bot` manage bot owners. Omit `teamId` on those when the token belongs to one team.
 
 `POST /mcp` does not stream task changes. The server instructions and the `hearth://task-events` resource point at `GET /teams/:id/events`. See Live task events above.
 
@@ -320,6 +325,8 @@ export default defineConnection({
 
 Schema changes need a new SQL file under `apps/api/drizzle` and a matching entry in `drizzle/meta/_journal.json`. The Drizzle schema in `apps/api/src/schema.ts` is what queries use.
 
+`0005_projects.sql` copies each non-empty `tasks.project` string into a team-scoped project and sets `project_id`, then drops the text column. Strings that are area names (House, Home, Finance, Work, Kitchen, Shed, Admin, Errands, Personal, Health, Family, Career, any case) are left unlinked. Areas are not invented from those strings.
+
 ## Not in v1
 
-File attachments, live Google Calendar create/sync, a Project entity, outbound webhooks, and native apps. A task can store a calendar event id and a source link (email or any http(s) URL). Railway config is in the repo; this repo does not create or deploy the Railway project.
+File attachments, live Google Calendar create/sync, outbound webhooks, and native apps. A task can store a calendar event id, a source link (email or any http(s) URL), and a project and an area. Railway config is in the repo; this repo does not create or deploy the Railway project.

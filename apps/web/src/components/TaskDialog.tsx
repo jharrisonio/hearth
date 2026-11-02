@@ -3,14 +3,17 @@ import {
   isHttpUrl,
   suggestAction,
   type Action,
+  type AreaSummary,
   type BotSummary,
   type BotTokenSummary,
   type Member,
+  type ProjectSummary,
   type SourceType,
   type Task,
+  type TaskLink,
   type TaskSource,
 } from "@hearth/shared";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { actionLabel, axesFor } from "@/lib/action";
@@ -84,7 +87,10 @@ function TaskForm({
   const [action, setAction] = useState<Action>(task?.action ?? defaultAction);
   const [waitingOn, setWaitingOn] = useState(task?.waitingOn ?? "");
   const [calendarEventId, setCalendarEventId] = useState(task?.calendarEventId ?? "");
-  const [project, setProject] = useState(task?.project ?? "");
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [areas, setAreas] = useState<AreaSummary[]>([]);
+  const [projectId, setProjectId] = useState(task?.project?.id ?? "");
+  const [areaId, setAreaId] = useState(task?.area?.id ?? "");
   const [sourceType, setSourceType] = useState<SourceType | "">(task?.source?.type ?? "");
   const [sourceHref, setSourceHref] = useState(task?.source?.href ?? "");
   const [sourceLabel, setSourceLabel] = useState(task?.source?.label ?? "");
@@ -101,12 +107,14 @@ function TaskForm({
 
   useEffect(() => {
     let cancelled = false;
-    void Promise.all([api.team(teamId), api.bots(teamId), api.tokens(teamId)])
-      .then(([detailResponse, botList, tokenList]) => {
+    void Promise.all([api.team(teamId), api.bots(teamId), api.tokens(teamId), api.projects(teamId), api.areas(teamId)])
+      .then(([detailResponse, botList, tokenList, projectList, areaList]) => {
         if (cancelled) return;
         setMembers(detailResponse.members);
         setBots(botList.bots);
         setTokens(tokenList.tokens);
+        setProjects(withCurrent(projectList.projects, task?.project ?? null, teamId));
+        setAreas(withCurrent(areaList.areas, task?.area ?? null, teamId));
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -151,7 +159,8 @@ function TaskForm({
       action,
       waitingOn: action === "delegate" ? waitingOn.trim() : null,
       ...(action === "schedule" ? { calendarEventId: calendarEventId.trim() || null } : {}),
-      project: project.trim() || null,
+      projectId: projectId || null,
+      areaId: areaId || null,
       source,
       dueAt: action === "delegate" && !task && !dueAt ? undefined : fromLocalInput(dueAt),
       important,
@@ -274,33 +283,49 @@ function TaskForm({
           {task?.needsCalendar ? <p className={hintClass}>Needs a calendar.</p> : null}
         </>
       ) : null}
-      <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-2">
-        <label className={labelClass}>
-          Owner
-          <select className={fieldClass} value={owner} onChange={(event) => setOwner(event.target.value)}>
-            {members.map((member) => (
-              <option key={member.userId} value={ownerKey("user", member.userId)}>
-                {member.name}
-              </option>
-            ))}
-            {bots.map((bot) => (
-              <option key={bot.id} value={ownerKey("bot", bot.id)}>
-                {bot.name}
-              </option>
-            ))}
-            {activeTokens.map((token) => (
-              <option key={token.id} value={ownerKey("bot", token.id)}>
-                {token.label}
-                {token.revokedAt ? " (revoked)" : ""}
-              </option>
-            ))}
-            {unknownBot ? <option value={ownerKey("bot", unknownBot)}>Unregistered bot</option> : null}
-          </select>
-        </label>
-        <label className={labelClass}>
-          Project
-          <input className={fieldClass} value={project} placeholder="e.g. Jean St" onChange={(event) => setProject(event.target.value)} />
-        </label>
+      <label className={labelClass}>
+        Owner
+        <select className={fieldClass} value={owner} onChange={(event) => setOwner(event.target.value)}>
+          {members.map((member) => (
+            <option key={member.userId} value={ownerKey("user", member.userId)}>
+              {member.name}
+            </option>
+          ))}
+          {bots.map((bot) => (
+            <option key={bot.id} value={ownerKey("bot", bot.id)}>
+              {bot.name}
+            </option>
+          ))}
+          {activeTokens.map((token) => (
+            <option key={token.id} value={ownerKey("bot", token.id)}>
+              {token.label}
+              {token.revokedAt ? " (revoked)" : ""}
+            </option>
+          ))}
+          {unknownBot ? <option value={ownerKey("bot", unknownBot)}>Unregistered bot</option> : null}
+        </select>
+      </label>
+      <div className="grid grid-cols-1 gap-x-6 sm:grid-cols-2">
+        <LinkField
+          label="Project"
+          hint="A multi-step outcome."
+          placeholder="e.g. Tara AU returns"
+          value={projectId}
+          options={projects}
+          onChange={setProjectId}
+          onCreate={(name) =>
+            createLink(name, (next) => api.createProject(teamId, next), setProjects, setProjectId, setError)
+          }
+        />
+        <LinkField
+          label="Area"
+          hint="A life or work domain."
+          placeholder="e.g. House"
+          value={areaId}
+          options={areas}
+          onChange={setAreaId}
+          onCreate={(name) => createLink(name, (next) => api.createArea(teamId, next), setAreas, setAreaId, setError)}
+        />
       </div>
       <label className={labelClass}>
         Detail
@@ -373,5 +398,114 @@ function TaskForm({
         ) : null}
       </div>
     </form>
+  );
+}
+
+function withCurrent<T extends ProjectSummary>(rows: T[], current: TaskLink | null, teamId: string): T[] {
+  if (!current || rows.some((row) => row.id === current.id)) return rows;
+  return [
+    ...rows,
+    {
+      id: current.id,
+      teamId,
+      name: current.name,
+      archivedAt: new Date(0).toISOString(),
+      createdAt: current.id,
+      updatedAt: current.id,
+    } as T,
+  ];
+}
+
+async function createLink(
+  name: string,
+  create: (name: string) => Promise<ProjectSummary>,
+  setRows: Dispatch<SetStateAction<ProjectSummary[]>>,
+  setId: (id: string) => void,
+  setError: (message: string | null) => void,
+) {
+  try {
+    const created = await create(name);
+    setRows((rows) => {
+      const next = rows.some((row) => row.id === created.id)
+        ? rows.map((row) => (row.id === created.id ? created : row))
+        : [...rows, created];
+      return next.sort((a, b) => a.name.localeCompare(b.name));
+    });
+    setId(created.id);
+    setError(null);
+  } catch (err) {
+    setError(err instanceof ApiError ? err.message : "Could not add that.");
+    throw err;
+  }
+}
+
+function LinkField({
+  label,
+  hint,
+  placeholder,
+  value,
+  options,
+  onChange,
+  onCreate,
+}: {
+  label: string;
+  hint: string;
+  placeholder: string;
+  value: string;
+  options: ProjectSummary[];
+  onChange: (id: string) => void;
+  onCreate: (name: string) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState("");
+  const [adding, setAdding] = useState(false);
+
+  async function add() {
+    const name = draft.trim();
+    if (!name) return;
+    setAdding(true);
+    try {
+      await onCreate(name);
+      setDraft("");
+    } catch {
+      // The form already shows the error.
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  return (
+    <div>
+      <label className={labelClass}>
+        {label}
+        <select className={fieldClass} value={value} onChange={(event) => onChange(event.target.value)}>
+          <option value="">None</option>
+          {options.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.name}
+              {option.archivedAt ? " (archived)" : ""}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="flex items-end gap-3">
+        <input
+          className={fieldClass}
+          value={draft}
+          placeholder={placeholder}
+          aria-label={`New ${label.toLowerCase()}`}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              void add();
+            }
+          }}
+        />
+        <Button type="button" onClick={() => void add()} disabled={adding || !draft.trim()}>
+          Add
+        </Button>
+      </div>
+      <p className={hintClass}>{hint}</p>
+    </div>
   );
 }

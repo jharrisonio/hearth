@@ -60,6 +60,38 @@ export const botTokens = pgTable(
   (table) => [index("bot_tokens_team_idx").on(table.teamId)],
 );
 
+/** A multi-step outcome, scoped to one team. Not a life area. */
+export const projects = pgTable(
+  "projects",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    teamId: uuid("team_id")
+      .notNull()
+      .references(() => teams.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("projects_team_idx").on(table.teamId)],
+);
+
+/** A life or work domain, scoped to one team. Not a project. */
+export const areas = pgTable(
+  "areas",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    teamId: uuid("team_id")
+      .notNull()
+      .references(() => teams.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("areas_team_idx").on(table.teamId)],
+);
+
 /** A bot you can assign a task to. Not a credential — tokens stay in bot_tokens. */
 export const bots = pgTable(
   "bots",
@@ -93,7 +125,8 @@ export const tasks = pgTable(
     waitingOn: text("waiting_on"),
     calendarEventId: text("calendar_event_id"),
     needsCalendar: boolean("needs_calendar").notNull().default(false),
-    project: text("project"),
+    projectId: uuid("project_id").references(() => projects.id, { onDelete: "set null" }),
+    areaId: uuid("area_id").references(() => areas.id, { onDelete: "set null" }),
     /** Email or page this task came from. Null when the task has no link. */
     source: jsonb("source").$type<TaskSource | null>(),
     dueAt: timestamp("due_at", { withTimezone: true }),
@@ -104,7 +137,11 @@ export const tasks = pgTable(
     createdByType: actorType("created_by_type").notNull(),
     createdById: uuid("created_by_id").notNull(),
   },
-  (table) => [index("tasks_team_status_action_idx").on(table.teamId, table.status, table.action)],
+  (table) => [
+    index("tasks_team_status_action_idx").on(table.teamId, table.status, table.action),
+    index("tasks_project_id_idx").on(table.projectId),
+    index("tasks_area_id_idx").on(table.areaId),
+  ],
 );
 
 /** One successful POST /tasks per actor and Idempotency-Key. `actor_id` is a user or a bot, so it has no foreign key. */

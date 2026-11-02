@@ -106,6 +106,13 @@ export const actorRefSchema = z.object({
 });
 export type ActorRef = z.infer<typeof actorRefSchema>;
 
+/** Project or area as it appears on a task. The catalog endpoints return the fuller summary. */
+export const taskLinkSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+});
+export type TaskLink = z.infer<typeof taskLinkSchema>;
+
 export const taskSchema = z.object({
   id: z.string().uuid(),
   teamId: z.string().uuid(),
@@ -119,7 +126,8 @@ export const taskSchema = z.object({
   waitingOn: z.string().nullable(),
   calendarEventId: z.string().nullable(),
   needsCalendar: z.boolean(),
-  project: z.string().nullable(),
+  project: taskLinkSchema.nullable(),
+  area: taskLinkSchema.nullable(),
   source: taskSourceSchema.nullable(),
   dueAt: z.string().nullable(),
   outcome: z.string().nullable(),
@@ -162,7 +170,8 @@ export const createTaskSchema = z
     waitingOn: z.string().trim().max(200).nullable().optional(),
     calendarEventId: z.string().trim().max(1024).nullable().optional(),
     needsCalendar: z.boolean().optional(),
-    project: z.string().trim().max(120).nullable().optional(),
+    projectId: z.string().uuid().nullable().optional(),
+    areaId: z.string().uuid().nullable().optional(),
     source: taskSourceSchema.nullable().optional(),
     dueAt: dueAt.optional(),
   })
@@ -180,7 +189,8 @@ export const updateTaskSchema = z
     waitingOn: z.string().trim().max(200).nullable().optional(),
     calendarEventId: z.string().trim().max(1024).nullable().optional(),
     needsCalendar: z.boolean().optional(),
-    project: z.string().trim().max(120).nullable().optional(),
+    projectId: z.string().uuid().nullable().optional(),
+    areaId: z.string().uuid().nullable().optional(),
     source: taskSourceSchema.nullable().optional(),
     dueAt: dueAt.optional(),
   })
@@ -315,7 +325,8 @@ export const listTasksQuerySchema = z
     urgent: z.boolean().optional(),
     owner: ownerQuery.optional(),
     dueBefore: z.string().min(1).max(40).optional(),
-    project: z.string().max(120).optional(),
+    projectId: z.string().uuid().optional(),
+    areaId: z.string().uuid().optional(),
     mine: z.boolean().optional(),
   })
   .strict();
@@ -364,3 +375,69 @@ export const unregisterBotToolSchema = z
   })
   .strict();
 export type UnregisterBotToolInput = z.infer<typeof unregisterBotToolSchema>;
+
+/** A project (multi-step outcome) or an area (life or work domain) on one team. */
+export const namedSummarySchema = z.object({
+  id: z.string().uuid(),
+  teamId: z.string().uuid(),
+  name: z.string(),
+  archivedAt: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type ProjectSummary = z.infer<typeof namedSummarySchema>;
+export type AreaSummary = ProjectSummary;
+
+export const createProjectSchema = z
+  .object({
+    name: z.string().trim().min(1).max(120),
+  })
+  .strict();
+export type CreateProjectInput = z.infer<typeof createProjectSchema>;
+
+export const updateProjectSchema = z
+  .object({
+    name: z.string().trim().min(1).max(120).optional(),
+    archived: z.boolean().optional(),
+  })
+  .strict()
+  .refine((value) => value.name !== undefined || value.archived !== undefined, {
+    message: "Provide a name or archived.",
+  });
+export type UpdateProjectInput = z.infer<typeof updateProjectSchema>;
+
+export const createAreaSchema = z
+  .object({
+    name: z.string().trim().min(1).max(80),
+  })
+  .strict();
+export type CreateAreaInput = z.infer<typeof createAreaSchema>;
+
+export const updateAreaSchema = z
+  .object({
+    name: z.string().trim().min(1).max(80).optional(),
+    archived: z.boolean().optional(),
+  })
+  .strict()
+  .refine((value) => value.name !== undefined || value.archived !== undefined, {
+    message: "Provide a name or archived.",
+  });
+export type UpdateAreaInput = z.infer<typeof updateAreaSchema>;
+
+export const createProjectToolSchema = createProjectSchema.extend({
+  teamId: z.string().uuid().optional(),
+});
+export type CreateProjectToolInput = z.infer<typeof createProjectToolSchema>;
+
+export const createAreaToolSchema = createAreaSchema.extend({
+  teamId: z.string().uuid().optional(),
+});
+export type CreateAreaToolInput = z.infer<typeof createAreaToolSchema>;
+
+export const listNamedToolSchema = z
+  .object({
+    teamId: z.string().uuid().optional(),
+    includeArchived: z.boolean().optional(),
+  })
+  .strict();
+export type ListNamedToolInput = z.infer<typeof listNamedToolSchema>;

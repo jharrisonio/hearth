@@ -18,9 +18,11 @@ import { HttpError, parseBody } from "../errors.js";
 import { iso, readJson, requireUuid } from "../http.js";
 import { botTokens, bots, memberships, teams, users } from "../schema.js";
 import { mintToken } from "../tokens.js";
+import { registerCatalogRoutes } from "./catalog.js";
 
 export const teamRoutes = new Hono<AppEnv>();
 teamRoutes.use("*", requireActor);
+registerCatalogRoutes(teamRoutes);
 
 teamRoutes.get("/", async (c) => {
   const actor = c.get("actor");

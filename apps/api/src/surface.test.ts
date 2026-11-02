@@ -11,7 +11,7 @@ process.env.SESSION_SECRET ??= "test-session-secret-value";
 const { createApp } = await import("./app.js");
 const { db, pool, runMigrations } = await import("./db.js");
 const { signSession } = await import("./actor.js");
-const { botTokens, bots, idempotencyKeys, memberships, tasks, teams, users } = await import("./schema.js");
+const { areas, botTokens, bots, idempotencyKeys, memberships, projects, tasks, teams, users } = await import("./schema.js");
 const { mintToken } = await import("./tokens.js");
 const { and, eq } = await import("drizzle-orm");
 
@@ -34,11 +34,24 @@ describe("task surface", { concurrency: 1 }, () => {
     for (const column of ["agent_id", "name", "team_id"]) {
       assert.ok(names.includes(column), `bots.${column} missing`);
     }
+    const catalog = await pool.query<{ table_name: string; column_name: string }>(
+      `select table_name, column_name from information_schema.columns
+       where table_schema = 'public' and table_name in ('tasks', 'projects', 'areas')`,
+    );
+    const has = (table: string, column: string) =>
+      catalog.rows.some((row) => row.table_name === table && row.column_name === column);
+    assert.equal(has("tasks", "project"), false);
+    assert.equal(has("tasks", "project_id"), true);
+    assert.equal(has("tasks", "area_id"), true);
+    for (const column of ["id", "team_id", "name", "archived_at"]) {
+      assert.equal(has("projects", column), true, `projects.${column}`);
+      assert.equal(has("areas", column), true, `areas.${column}`);
+    }
   });
 
   beforeEach(async () => {
     await pool.query(
-      "TRUNCATE TABLE users, teams, memberships, bot_tokens, bots, tasks, idempotency_keys RESTART IDENTITY CASCADE",
+      "TRUNCATE TABLE users, teams, memberships, bot_tokens, bots, projects, areas, tasks, idempotency_keys RESTART IDENTITY CASCADE",
     );
   });
 
@@ -207,9 +220,13 @@ describe("task surface", { concurrency: 1 }, () => {
     const tools = (rpcResult(listed.json) as { tools: { name: string }[] }).tools.map((tool) => tool.name).sort();
     assert.deepEqual(tools, [
       "complete_task",
+      "create_area",
+      "create_project",
       "create_task",
+      "list_areas",
       "list_bots",
       "list_do_immediately",
+      "list_projects",
       "list_tasks",
       "register_bot",
       "unregister_bot",
@@ -266,13 +283,47 @@ describe("task surface", { concurrency: 1 }, () => {
     ) as { tasks: { id: string }[] };
     assert.deepEqual(found.tasks.map((task) => task.id), [created.id]);
 
+    const project = toolJson(
+      await rpc(fixture.secret, "tools/call", {
+        name: "create_project",
+        arguments: { name: "Tara AU returns" },
+      }),
+    ) as { id: string; name: string };
+    assert.equal(project.name, "Tara AU returns");
+    const sameProject = toolJson(
+      await rpc(fixture.secret, "tools/call", {
+        name: "create_project",
+        arguments: { name: "tara au returns" },
+      }),
+    ) as { id: string };
+    assert.equal(sameProject.id, project.id);
+    const area = toolJson(
+      await rpc(fixture.secret, "tools/call", { name: "create_area", arguments: { name: "Finance" } }),
+    ) as { id: string; name: string };
+    assert.equal(area.name, "Finance");
+    const projectList = toolJson(
+      await rpc(fixture.secret, "tools/call", { name: "list_projects", arguments: {} }),
+    ) as { projects: { id: string }[] };
+    assert.deepEqual(projectList.projects.map((row) => row.id), [project.id]);
+
     const updated = toolJson(
       await rpc(fixture.secret, "tools/call", {
         name: "update_task",
-        arguments: { id: created.id, title: "Rally the morning list" },
+        arguments: { id: created.id, title: "Rally the morning list", projectId: project.id, areaId: area.id },
       }),
-    ) as { title: string };
+    ) as { title: string; project: { id: string; name: string } | null; area: { id: string; name: string } | null };
     assert.equal(updated.title, "Rally the morning list");
+    assert.deepEqual(updated.project, { id: project.id, name: "Tara AU returns" });
+    assert.deepEqual(updated.area, { id: area.id, name: "Finance" });
+
+    const cleared = toolJson(
+      await rpc(fixture.secret, "tools/call", {
+        name: "update_task",
+        arguments: { id: created.id, projectId: null, areaId: null },
+      }),
+    ) as { project: null; area: null };
+    assert.equal(cleared.project, null);
+    assert.equal(cleared.area, null);
 
     const queue = toolJson(
       await rpc(fixture.secret, "tools/call", { name: "list_do_immediately", arguments: {} }),
@@ -451,6 +502,97 @@ describe("task surface", { concurrency: 1 }, () => {
     ) as { source: null };
     assert.equal(removed.source, null);
   });
+
+  test("projects and areas link, filter, archive, and stay on the team", async () => {
+    const fixture = await seed();
+    const created = await call(fixture.secret, "POST", `/teams/${fixture.team.id}/projects`, { name: "  Novus switch  " });
+    assert.equal(created.status, 201);
+    const project = namedBody(created.json);
+    assert.equal(project.name, "Novus switch");
+    const again = await call(fixture.secret, "POST", `/teams/${fixture.team.id}/projects`, { name: "novus switch" });
+    assert.equal(again.status, 200);
+    assert.equal(namedBody(again.json).id, project.id);
+
+    const areaResponse = await call(fixture.secret, "POST", `/teams/${fixture.team.id}/areas`, { name: "House" });
+    assert.equal(areaResponse.status, 201);
+    const area = namedBody(areaResponse.json);
+    const clash = await call(fixture.secret, "PATCH", `/teams/${fixture.team.id}/projects/${project.id}`, {
+      name: "Novus switch",
+    });
+    assert.equal(clash.status, 200);
+
+    const [otherTeam] = await db.insert(teams).values({ name: "Elsewhere", kind: "household" }).returning();
+    assert.ok(otherTeam);
+    const [otherProject] = await db.insert(projects).values({ teamId: otherTeam.id, name: "Novus switch" }).returning();
+    assert.ok(otherProject);
+    const foreign = await postTask(fixture.secret, {
+      teamId: fixture.team.id,
+      title: "Wrong team",
+      projectId: otherProject.id,
+    });
+    assert.equal(foreign.status, 400);
+    assert.equal(errorBody(foreign.json).code, "invalid_project");
+
+    const task = await postTask(fixture.secret, {
+      teamId: fixture.team.id,
+      title: "Switch the account",
+      projectId: project.id,
+      areaId: area.id,
+    });
+    assert.equal(task.status, 201);
+    const body = taskBody(task.json);
+    assert.deepEqual(body.project, { id: project.id, name: "Novus switch" });
+    assert.deepEqual(body.area, { id: area.id, name: "House" });
+
+    const listed = await call(
+      fixture.secret,
+      "GET",
+      `/tasks?teamId=${fixture.team.id}&projectId=${project.id}&areaId=${area.id}`,
+    );
+    assert.equal(listed.status, 200);
+    assert.deepEqual((listed.json as { tasks: { id: string }[] }).tasks.map((row) => row.id), [body.id]);
+
+    const oldFilter = await call(fixture.secret, "GET", "/tasks?project=Novus%20switch");
+    assert.equal(oldFilter.status, 400);
+    assert.equal(errorBody(oldFilter.json).code, "invalid_query");
+
+    const archived = await call(fixture.secret, "PATCH", `/teams/${fixture.team.id}/projects/${project.id}`, {
+      archived: true,
+    });
+    assert.equal(archived.status, 200);
+    assert.equal(typeof namedBody(archived.json).archivedAt, "string");
+    const active = await call(fixture.secret, "GET", `/teams/${fixture.team.id}/projects`);
+    assert.deepEqual((active.json as { projects: unknown[] }).projects, []);
+    const withArchived = await call(fixture.secret, "GET", `/teams/${fixture.team.id}/projects?includeArchived=true`);
+    assert.equal((withArchived.json as { projects: { id: string }[] }).projects[0]?.id, project.id);
+    const still = await call(fixture.secret, "GET", `/tasks?teamId=${fixture.team.id}&projectId=${project.id}`);
+    assert.equal((still.json as { tasks: { project: { name: string } | null }[] }).tasks[0]?.project?.name, "Novus switch");
+
+    const restored = await call(fixture.secret, "POST", `/teams/${fixture.team.id}/projects`, { name: "Novus switch" });
+    assert.equal(restored.status, 200);
+    assert.equal(namedBody(restored.json).archivedAt, null);
+    assert.equal(namedBody(restored.json).id, project.id);
+
+    const [second] = await db.insert(projects).values({ teamId: fixture.team.id, name: "Tara AU returns" }).returning();
+    assert.ok(second);
+    const rename = await call(fixture.secret, "PATCH", `/teams/${fixture.team.id}/projects/${project.id}`, {
+      name: "Tara AU returns",
+    });
+    assert.equal(rename.status, 409);
+    assert.equal(errorBody(rename.json).code, "conflict");
+
+    const cleared = await call(fixture.secret, "PATCH", `/tasks/${body.id}`, { projectId: null, areaId: null });
+    assert.equal(cleared.status, 200);
+    assert.equal(taskBody(cleared.json).project, null);
+    assert.equal(taskBody(cleared.json).area, null);
+
+    const missing = await call(fixture.secret, "PATCH", `/tasks/${body.id}`, {
+      areaId: "00000000-0000-4000-8000-000000000099",
+    });
+    assert.equal(missing.status, 400);
+    assert.equal(errorBody(missing.json).code, "invalid_area");
+    assert.equal((await db.select().from(areas)).length >= 1, true);
+  });
 });
 
 async function seed() {
@@ -540,10 +682,24 @@ function toolJson(response: { json: unknown }) {
 }
 
 function taskBody(json: unknown) {
-  const task = json as { id: string; owner: { type: string; id: string }; title: string; source: unknown };
+  const task = json as {
+    id: string;
+    owner: { type: string; id: string };
+    title: string;
+    source: unknown;
+    project: { id: string; name: string } | null;
+    area: { id: string; name: string } | null;
+  };
   assert.equal(typeof task.id, "string");
   assert.ok("source" in task, "task includes source");
   return task;
+}
+
+function namedBody(json: unknown) {
+  const row = json as { id: string; name: string; archivedAt: string | null };
+  assert.equal(typeof row.id, "string");
+  assert.equal(typeof row.name, "string");
+  return row;
 }
 
 function botBody(json: unknown) {
