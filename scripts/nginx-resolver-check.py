@@ -109,6 +109,7 @@ def render_template() -> str:
         f'set $hearth_api_port "{HTTP_PORT}";',
         "rewrite ^/api/(.*)$ /$1 break;",
         "proxy_pass http://$hearth_api_host:$hearth_api_port;",
+        "rewrite ^/\\.well-known/(oauth-authorization-server|oauth-protected-resource)(?:/.*)?$ /.well-known/$1 break;",
         "proxy_buffering off;",
         "gzip off;",
         "proxy_read_timeout 900s;",
@@ -281,6 +282,21 @@ def stream_probe() -> None:
     print("nginx flushed the first SSE chunk before the upstream finished")
 
 
+def well_known_probe() -> None:
+    cases = [
+        ("/.well-known/oauth-protected-resource", "two /.well-known/oauth-protected-resource"),
+        ("/.well-known/oauth-protected-resource/api/mcp", "two /.well-known/oauth-protected-resource"),
+        ("/.well-known/oauth-protected-resource/mcp?x=1", "two /.well-known/oauth-protected-resource?x=1"),
+        ("/.well-known/oauth-authorization-server", "two /.well-known/oauth-authorization-server"),
+        ("/.well-known/oauth-authorization-server/api", "two /.well-known/oauth-authorization-server"),
+    ]
+    for path, expect in cases:
+        got = fetch(path)
+        if got != expect:
+            fail(f"well-known {path} -> {got!r}, expected {expect!r}\n{(WORKDIR / 'error.log').read_text()}")
+    print("nginx proxied OAuth discovery to the API without the path suffix")
+
+
 def fetch(path: str) -> str:
     with socket.create_connection(("127.0.0.1", WEB_PORT), timeout=3) as sock:
         sock.sendall(f"GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n".encode())
@@ -329,6 +345,7 @@ def main() -> None:
                 f"got {second!r}\ndns {dns.queries}\n{(WORKDIR / 'error.log').read_text()}"
             )
         stream_probe()
+        well_known_probe()
     finally:
         nginx.send_signal(signal.SIGTERM)
         nginx.wait(timeout=5)
