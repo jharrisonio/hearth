@@ -109,6 +109,10 @@ def render_template() -> str:
         f'set $hearth_api_port "{HTTP_PORT}";',
         "rewrite ^/api/(.*)$ /$1 break;",
         "proxy_pass http://$hearth_api_host:$hearth_api_port;",
+        "proxy_buffering off;",
+        "gzip off;",
+        "proxy_read_timeout 900s;",
+        "proxy_send_timeout 900s;",
     ]
     for snippet in required:
         if snippet not in text:
@@ -171,6 +175,17 @@ class DnsServer(threading.Thread):
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
+        if self.path.startswith("/stream-probe"):
+            self.send_response(200)
+            self.send_header("content-type", "text/event-stream")
+            self.send_header("cache-control", "no-cache")
+            self.end_headers()
+            self.wfile.write(b"event: ready\ndata: one\n\n")
+            self.wfile.flush()
+            time.sleep(1.2)
+            self.wfile.write(b"event: task\ndata: two\n\n")
+            self.wfile.flush()
+            return
         body = f"{self.server.label} {self.path}".encode()  # type: ignore[attr-defined]
         self.send_response(200)
         self.send_header("content-type", "text/plain")
@@ -233,6 +248,39 @@ def start_nginx(server_conf: str) -> subprocess.Popen[str]:
     raise AssertionError("unreachable")
 
 
+def recv_until(sock: socket.socket, predicate, seconds: float) -> bytes:
+    data = b""
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if predicate(data):
+            return data
+        try:
+            chunk = sock.recv(4096)
+        except socket.timeout:
+            continue
+        if not chunk:
+            break
+        data += chunk
+    return data
+
+
+def stream_probe() -> None:
+    started = time.time()
+    with socket.create_connection(("127.0.0.1", WEB_PORT), timeout=3) as sock:
+        sock.settimeout(0.1)
+        sock.sendall(b"GET /api/stream-probe HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        early = recv_until(sock, lambda data: b"data: one" in data, 2.5)
+        early_at = time.time() - started
+        if b"data: one" not in early:
+            fail(f"stream probe did not flush the first chunk\n{early!r}\n{(WORKDIR / 'error.log').read_text()}")
+        if b"data: two" in early or early_at >= 0.7:
+            fail(f"first SSE chunk was held ({early_at:.2f}s)\n{early!r}")
+        rest = early + recv_until(sock, lambda data: b"data: two" in data, 2.5)
+        if b"data: two" not in rest:
+            fail(f"stream probe dropped the rest of the event\n{rest!r}")
+    print("nginx flushed the first SSE chunk before the upstream finished")
+
+
 def fetch(path: str) -> str:
     with socket.create_connection(("127.0.0.1", WEB_PORT), timeout=3) as sock:
         sock.sendall(f"GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n".encode())
@@ -280,6 +328,7 @@ def main() -> None:
                 "nginx kept the old upstream IP after DNS changed.\n"
                 f"got {second!r}\ndns {dns.queries}\n{(WORKDIR / 'error.log').read_text()}"
             )
+        stream_probe()
     finally:
         nginx.send_signal(signal.SIGTERM)
         nginx.wait(timeout=5)

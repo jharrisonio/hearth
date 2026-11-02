@@ -10,7 +10,6 @@ import {
   type Action,
   type ActorRef,
   type CreateTaskInput,
-  type Task,
   type TaskStatus,
 } from "@hearth/shared";
 import { and, desc, eq, inArray, isNotNull, lt, sql, type SQL } from "drizzle-orm";
@@ -26,9 +25,11 @@ import {
 } from "../actor.js";
 import { db } from "../db.js";
 import { blankToNull, HttpError, parseBody } from "../errors.js";
-import { iso, readJson, requireUuid } from "../http.js";
+import { publishTaskEvent } from "../events.js";
+import { readJson, requireUuid } from "../http.js";
 import { parseIdempotencyKey, withCreateIdempotency } from "../idempotency.js";
 import { tasks } from "../schema.js";
+import { toTask } from "../task-json.js";
 
 const BLOCKED_UPDATE = new Set([
   "status",
@@ -125,11 +126,13 @@ taskRoutes.post("/", async (c) => {
     if (!inserted) throw new Error("Failed to create task");
     return inserted;
   });
+  const task = toTask(row);
   if (replayed) {
     c.header("Idempotent-Replayed", "true");
-    return c.json(toTask(row), 200);
+    return c.json(task, 200);
   }
-  return c.json(toTask(row), 201);
+  await publishTaskEvent("created", task);
+  return c.json(task, 201);
 });
 
 taskRoutes.patch("/:id", async (c) => {
@@ -195,7 +198,9 @@ taskRoutes.patch("/:id", async (c) => {
     .where(eq(tasks.id, id))
     .returning();
   if (!row) throw new HttpError(404, "not_found", "Task not found.");
-  return c.json(toTask(row));
+  const task = toTask(row);
+  await publishTaskEvent("updated", task);
+  return c.json(task);
 });
 
 taskRoutes.post("/:id/complete", async (c) => {
@@ -219,7 +224,9 @@ taskRoutes.post("/:id/complete", async (c) => {
     .where(eq(tasks.id, id))
     .returning();
   if (!row) throw new HttpError(404, "not_found", "Task not found.");
-  return c.json(toTask(row));
+  const task = toTask(row);
+  await publishTaskEvent("completed", task);
+  return c.json(task);
 });
 
 async function loadTask(id: string) {
@@ -296,30 +303,6 @@ function parseDue(value: string | null | undefined): Date | null {
     throw new HttpError(400, "invalid_body", "dueAt must be an ISO datetime.");
   }
   return date;
-}
-
-function toTask(row: typeof tasks.$inferSelect): Task {
-  return {
-    id: row.id,
-    teamId: row.teamId,
-    title: row.title,
-    detail: row.detail,
-    status: row.status,
-    owner: { type: row.ownerType, id: row.ownerId },
-    important: row.important,
-    urgent: row.urgent,
-    action: row.action,
-    waitingOn: row.waitingOn,
-    calendarEventId: row.calendarEventId,
-    needsCalendar: row.needsCalendar,
-    project: row.project,
-    dueAt: iso(row.dueAt),
-    outcome: row.outcome,
-    createdAt: iso(row.createdAt) ?? new Date(0).toISOString(),
-    updatedAt: iso(row.updatedAt) ?? new Date(0).toISOString(),
-    completedAt: iso(row.completedAt),
-    createdBy: { type: row.createdByType, id: row.createdById },
-  };
 }
 
 function optionalUuid(value: string | undefined, name: string) {
