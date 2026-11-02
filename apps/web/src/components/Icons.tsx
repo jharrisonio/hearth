@@ -1,16 +1,18 @@
-export function GearIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.25">
-      <circle cx="12" cy="12" r="3" />
-      <path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.6 5.6l1.7 1.7M16.7 16.7l1.7 1.7M18.4 5.6l-1.7 1.7M7.3 16.7l-1.7 1.7" />
-    </svg>
-  );
+import { Settings } from "lucide-react";
+import { cn } from "@/lib/cn";
+
+/** 44px hit target. Glyphs sit inside, larger than the old 16px sun. */
+export const iconButtonClass =
+  "inline-flex size-11 shrink-0 items-center justify-center text-[#bbb] transition-[color,opacity] duration-150 ease-[cubic-bezier(0.2,0.6,0.2,1)] hover:text-white active:opacity-35";
+
+export function GearIcon({ className }: { className?: string }) {
+  return <Settings aria-hidden strokeWidth={1.5} className={cn("size-6", className)} />;
 }
 
 export function CloseIcon() {
   return (
-    <svg viewBox="0 0 24 24" aria-hidden className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.25">
-      <path d="M6 6l12 12M18 6L6 18" />
-    </svg>
+    <span aria-hidden className="block translate-y-px text-[22px] font-extralight leading-none">
+      ✕
+    </span>
   );
 }
