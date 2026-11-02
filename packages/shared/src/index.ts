@@ -56,7 +56,7 @@ export function suggestAction(important: boolean, urgent: boolean): Action {
 
 /**
  * A schedule task with no calendar id needs a calendar.
- * Any calendar id forces needsCalendar false.
+ * Any calendar id or http(s) calendar URL forces needsCalendar false.
  * Leaving schedule clears an implied needsCalendar unless the caller sets one.
  */
 export function resolveNeedsCalendar(
@@ -70,6 +70,48 @@ export function resolveNeedsCalendar(
   if (explicit !== undefined) return explicit;
   if (!previous || previous.action === "schedule") return false;
   return previous.needsCalendar;
+}
+
+/**
+ * Open an attached calendar event.
+ * An http(s) value is the link that was pasted. Anything else is a Google Calendar event id.
+ */
+export function calendarHref(calendarEventId: string | null | undefined): string | null {
+  const value = calendarEventId?.trim() ?? "";
+  if (!value) return null;
+  if (isHttpUrl(value)) return value;
+  return `https://calendar.google.com/calendar/u/0/r/eventedit/${encodeURIComponent(value)}`;
+}
+
+/**
+ * Check-in set. An open schedule task whose event time (`dueAt`) is strictly in the past.
+ * The calendar may already be attached. `dueAt` is that time; there is no separate end.
+ */
+export function needsCheckIn(
+  task: {
+    status: TaskStatus;
+    action: Action;
+    dueAt: string | Date | null;
+  },
+  now: Date = new Date(),
+): boolean {
+  if (task.status !== "open" || task.action !== "schedule") return false;
+  if (task.dueAt == null) return false;
+  const dueMs = new Date(task.dueAt).getTime();
+  return !Number.isNaN(dueMs) && dueMs < now.getTime();
+}
+
+/**
+ * A linked schedule uses `dueAt` as the event time so check-in can fire after it.
+ * Other actions may store a calendar id without a time.
+ */
+export function scheduleRequiresDueAt(
+  action: Action,
+  calendarEventId: string | null | undefined,
+  dueAt: string | Date | null | undefined,
+): boolean {
+  const linked = typeof calendarEventId === "string" && calendarEventId.trim().length > 0;
+  return action === "schedule" && linked && (dueAt == null || dueAt === "");
 }
 
 /**
@@ -94,8 +136,10 @@ export function isProjectFront(action: Action): boolean {
 
 /**
  * Human morning queue. Open tasks only: done, cancelled, and `later` stay out.
- * Schedule is strictly overdue; an outsider delegate includes due now.
+ * Schedule is in when it needs a calendar, or when `needsCheckIn` (`dueAt` strictly past).
+ * An outsider delegate includes due now.
  * Pass `owner` so a bot-owned delegate stays out. Without `owner`, a delegate is treated as an outsider.
+ * Bot-owned schedule stays here too, and `inBotQueue` uses the same schedule rule for the owning bot.
  */
 export function inMorningQueue(
   task: {
@@ -111,10 +155,7 @@ export function inMorningQueue(
   if (task.status !== "open") return false;
   if (task.action === "do_now") return true;
   const dueMs = task.dueAt == null ? null : new Date(task.dueAt).getTime();
-  if (task.action === "schedule") {
-    if (task.needsCalendar) return true;
-    return dueMs != null && !Number.isNaN(dueMs) && dueMs < now.getTime();
-  }
+  if (task.action === "schedule") return task.needsCalendar || needsCheckIn(task, now);
   if (task.action === "delegate") {
     if (task.owner?.type === "bot") return false;
     if (dueMs != null && !Number.isNaN(dueMs) && dueMs <= now.getTime()) return true;
@@ -130,7 +171,8 @@ export function inMorningQueue(
 /**
  * Open work GET /tasks/do-immediately returns when the caller is a bot token.
  * `actorId` is that token's id. An open delegate counts at any follow-up.
- * Schedule counts when it still needs a calendar or is strictly overdue.
+ * Schedule counts when it still needs a calendar or `needsCheckIn` (`dueAt` strictly past),
+ * so the owning bot sees its schedule check-ins. The same rule is in `inMorningQueue`.
  * do_now stays on the human morning queue: do now is the human doing it.
  */
 export function inBotQueue(
@@ -147,11 +189,7 @@ export function inBotQueue(
   if (task.status !== "open") return false;
   if (task.owner.type !== "bot" || task.owner.id !== actorId) return false;
   if (task.action === "delegate") return true;
-  if (task.action === "schedule") {
-    if (task.needsCalendar) return true;
-    const dueMs = task.dueAt == null ? null : new Date(task.dueAt).getTime();
-    return dueMs != null && !Number.isNaN(dueMs) && dueMs < now.getTime();
-  }
+  if (task.action === "schedule") return task.needsCalendar || needsCheckIn(task, now);
   return false;
 }
 
@@ -217,6 +255,17 @@ export interface TaskEvent {
 }
 
 const dueAt = z.string().datetime({ offset: true }).nullable();
+
+/** Event id or the calendar URL a person pasted. Any non-empty value clears needsCalendar. */
+const calendarEventIdInput = z
+  .string()
+  .trim()
+  .max(1024)
+  .nullable()
+  .optional()
+  .describe(
+    "Event id or an http(s) calendar URL, such as a Google Calendar event link. Any value clears needsCalendar. On action schedule, dueAt is required with it and is the event time used for check-in.",
+  );
 const sortOrder = z.number().int().min(0).max(1_000_000).nullable();
 
 /** Outsider a human owner is waiting on. A bot owner may omit it. */
@@ -240,7 +289,7 @@ export const createTaskSchema = z
     urgent: z.boolean().optional(),
     action: z.enum(actions).optional(),
     waitingOn: waitingOnInput,
-    calendarEventId: z.string().trim().max(1024).nullable().optional(),
+    calendarEventId: calendarEventIdInput,
     needsCalendar: z.boolean().optional(),
     projectId: z.string().uuid().nullable().optional(),
     areaId: z.string().uuid().nullable().optional(),
@@ -260,7 +309,7 @@ export const updateTaskSchema = z
     urgent: z.boolean().optional(),
     action: z.enum(actions).optional(),
     waitingOn: waitingOnInput,
-    calendarEventId: z.string().trim().max(1024).nullable().optional(),
+    calendarEventId: calendarEventIdInput,
     needsCalendar: z.boolean().optional(),
     projectId: z.string().uuid().nullable().optional(),
     areaId: z.string().uuid().nullable().optional(),
@@ -412,6 +461,10 @@ export const listTasksQuerySchema = z
     status: z.enum(taskStatuses).optional(),
     important: z.boolean().optional(),
     urgent: z.boolean().optional(),
+    needsCalendar: z
+      .boolean()
+      .optional()
+      .describe("Filter tasks that still need a calendar. Pair with action=schedule and status=open."),
     owner: ownerQuery.optional(),
     dueBefore: z.string().min(1).max(40).optional(),
     projectId: z.string().uuid().optional(),

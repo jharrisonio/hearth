@@ -6,6 +6,7 @@ import {
   delegateRequiresWaitingOn,
   followUpFrom,
   resolveNeedsCalendar,
+  scheduleRequiresDueAt,
   suggestAction,
   taskStatuses,
   updateTaskSchema,
@@ -87,11 +88,13 @@ taskRoutes.get("/", async (c) => {
   const status = parseStatus(query.status);
   const important = parseBool(query.important, "important");
   const urgent = parseBool(query.urgent, "urgent");
+  const needsCalendar = parseBool(query.needsCalendar, "needsCalendar");
   const mine = parseBool(query.mine, "mine");
   if (action) filters.push(eq(tasks.action, action));
   if (status) filters.push(eq(tasks.status, status));
   if (important !== undefined) filters.push(eq(tasks.important, important));
   if (urgent !== undefined) filters.push(eq(tasks.urgent, urgent));
+  if (needsCalendar !== undefined) filters.push(eq(tasks.needsCalendar, needsCalendar));
   if (query.project !== undefined) {
     throw new HttpError(400, "invalid_query", "project has been removed. Filter with projectId.");
   }
@@ -188,6 +191,8 @@ taskRoutes.patch("/:id", async (c) => {
   assertDelegate(action, waitingOn, owner);
   const calendarEventId =
     body.calendarEventId !== undefined ? blankToNull(body.calendarEventId) ?? null : existing.calendarEventId;
+  const dueAt = body.dueAt !== undefined ? parseDue(body.dueAt) : existing.dueAt;
+  assertScheduleDue(action, calendarEventId, dueAt);
   const needsCalendar = resolveNeedsCalendar(action, calendarEventId, body.needsCalendar, {
     action: existing.action,
     needsCalendar: existing.needsCalendar,
@@ -215,7 +220,7 @@ taskRoutes.patch("/:id", async (c) => {
       areaId,
       sortOrder: body.sortOrder !== undefined ? body.sortOrder : existing.sortOrder,
       source: body.source !== undefined ? body.source : existing.source,
-      dueAt: body.dueAt !== undefined ? parseDue(body.dueAt) : existing.dueAt,
+      dueAt,
       updatedAt: new Date(),
     })
     .where(eq(tasks.id, id))
@@ -317,6 +322,7 @@ function taskInsertValues(actor: Actor, body: CreateTaskInput, now: Date) {
   const calendarEventId = blankToNull(body.calendarEventId) ?? null;
   const needsCalendar = resolveNeedsCalendar(action, calendarEventId, body.needsCalendar, null);
   const dueAt = action === "delegate" && body.dueAt === undefined ? followUpFrom(now) : parseDue(body.dueAt);
+  assertScheduleDue(action, calendarEventId, dueAt);
   return {
     owner,
     row: {
@@ -359,9 +365,19 @@ function assertDelegate(action: Action, waitingOn: string | null, owner: ActorRe
   }
 }
 
+function assertScheduleDue(action: Action, calendarEventId: string | null, dueAt: Date | null) {
+  if (!scheduleRequiresDueAt(action, calendarEventId, dueAt)) return;
+  throw new HttpError(
+    400,
+    "due_at_required",
+    "A linked schedule needs a time. Set dueAt to the event, then the open task can be checked in after it passes.",
+  );
+}
+
 /**
  * Human morning queue. Same membership as `inMorningQueue` when `owner` is set.
- * Schedule is strictly past; an outsider delegate includes due now.
+ * Schedule needs a calendar, or is a check-in (`needsCheckIn`: dueAt strictly past).
+ * An outsider delegate includes due now.
  * `later` is excluded, including future steps on a project.
  * Several do_now, delegate, or schedule tasks may share a project; this does not limit them.
  * Bot-owned delegates stay out: they are that bot's work, not an outsider nudge.
@@ -387,7 +403,7 @@ function morningQueueFilter() {
   )`;
 }
 
-/** Same membership as `inBotQueue` in @hearth/shared. Scoped to this token's owner id. */
+/** Same membership as `inBotQueue` in @hearth/shared. Schedule check-ins for this token's owner id. */
 function botQueueFilter(botId: string) {
   return and(
     eq(tasks.ownerType, "bot"),

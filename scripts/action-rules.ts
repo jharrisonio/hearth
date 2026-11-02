@@ -10,6 +10,7 @@
 import { readFileSync } from "node:fs";
 import {
   FOLLOW_UP_MS,
+  calendarHref,
   createAreaSchema,
   createProjectSchema,
   createTaskSchema,
@@ -20,7 +21,9 @@ import {
   isHttpUrl,
   isProjectFront,
   listTasksQuerySchema,
+  needsCheckIn,
   resolveNeedsCalendar,
+  scheduleRequiresDueAt,
   suggestAction,
   updateProjectSchema,
   updateTaskSchema,
@@ -68,6 +71,58 @@ function checkNeedsCalendar() {
   );
   assert(resolveNeedsCalendar("later", null, undefined, null) === false, "create defaults needsCalendar false");
   assert(resolveNeedsCalendar("delegate", null, undefined, null) === false, "delegate does not need a calendar");
+  assert(
+    resolveNeedsCalendar("schedule", "https://calendar.google.com/calendar/event?eid=abc", true, null) === false,
+    "a calendar URL forces needsCalendar false",
+  );
+
+  const href = "https://calendar.google.com/calendar/event?eid=abc";
+  assert(calendarHref(href) === href, "an http(s) calendar link opens as given");
+  assert(
+    calendarHref("  evt-1 ") === "https://calendar.google.com/calendar/u/0/r/eventedit/evt-1",
+    "an event id opens in Google Calendar",
+  );
+  assert(calendarHref(null) === null && calendarHref("  ") === null, "a blank calendar has no link");
+  const script = calendarHref("javascript:alert(1)");
+  assert(script?.startsWith("https://calendar.google.com/"), "a non-http calendar value is not opened as itself");
+  assert(!script?.includes("javascript:"), "the event id is encoded");
+
+  assert(scheduleRequiresDueAt("schedule", "evt", null), "a linked schedule needs dueAt");
+  assert(scheduleRequiresDueAt("schedule", " https://calendar.google.com/e ", null), "a calendar URL counts as linked");
+  assert(!scheduleRequiresDueAt("schedule", "evt", "2026-11-03T00:00:00.000Z"), "a linked schedule with a time is ok");
+  assert(!scheduleRequiresDueAt("schedule", null, null), "an unlinked schedule may omit dueAt");
+  assert(!scheduleRequiresDueAt("schedule", "  ", null), "a blank calendar is not linked");
+  assert(!scheduleRequiresDueAt("do_now", "evt", null), "other actions may carry an id without dueAt");
+
+  const linked = createTaskSchema.parse({ teamId, title: "Book it", action: "schedule", calendarEventId: `  ${href}  ` });
+  assert(linked.calendarEventId === href, "a pasted calendar URL is trimmed");
+  assert(listTasksQuerySchema.parse({ needsCalendar: true, action: "schedule", status: "open" }).needsCalendar === true, "list can filter needsCalendar");
+  assert(!listTasksQuerySchema.safeParse({ needsCalendar: "yes" }).success, "needsCalendar is a boolean");
+}
+
+function checkCheckIn() {
+  const now = new Date("2026-11-02T12:00:00.000Z");
+  const past = new Date(now.getTime() - 60_000);
+  const future = new Date(now.getTime() + 60_000);
+  const botId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const open = { status: "open" as const, action: "schedule" as const, dueAt: past };
+  assert(needsCheckIn(open, now), "an open schedule in the past is a check-in");
+  assert(needsCheckIn({ ...open, dueAt: past.toISOString() }, now), "a string dueAt still counts");
+  assert(!needsCheckIn({ ...open, dueAt: now }, now), "due exactly now is not yet a check-in");
+  assert(!needsCheckIn({ ...open, dueAt: future }, now), "a future schedule is not a check-in");
+  assert(!needsCheckIn({ ...open, dueAt: null }, now), "a schedule with no time is not a check-in");
+  assert(!needsCheckIn({ ...open, status: "done" }, now), "a done schedule is not a check-in");
+  assert(!needsCheckIn({ ...open, status: "cancelled" }, now), "a cancelled schedule is not a check-in");
+  assert(!needsCheckIn({ ...open, action: "do_now" }, now), "do_now is not a schedule check-in");
+
+  const linked = { ...open, needsCalendar: false, createdAt: now };
+  const unlinked = { ...linked, needsCalendar: true };
+  assert(needsCheckIn(linked, now) && inMorningQueue(linked, now), "overdue linked schedule is in the morning queue");
+  assert(needsCheckIn(unlinked, now) && inMorningQueue(unlinked, now), "overdue schedule is a check-in even without a calendar");
+  const owned = { ...linked, owner: { type: "bot" as const, id: botId } };
+  assert(inBotQueue(owned, botId, now) && needsCheckIn(owned, now), "the owning bot sees an overdue schedule check-in");
+  assert(inBotQueue({ ...owned, needsCalendar: true, dueAt: future }, botId, now), "the owning bot sees a schedule that still needs a calendar");
+  assert(!inBotQueue({ ...owned, dueAt: future }, botId, now), "a future linked schedule stays out of the bot queue");
 }
 
 function checkFollowUp() {
@@ -287,6 +342,7 @@ function checkMigrationSql() {
 try {
   checkSuggestion();
   checkNeedsCalendar();
+  checkCheckIn();
   checkFollowUp();
   checkMorningQueue();
   checkBotQueue();

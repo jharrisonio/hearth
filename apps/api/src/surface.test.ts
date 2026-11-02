@@ -1191,6 +1191,154 @@ describe("task surface", { concurrency: 1 }, () => {
     assert.equal(deniedResult.isError, true);
     assert.match(deniedResult.content?.[0]?.text ?? "", /waiting_on_required/);
   });
+
+  test("linking a calendar clears needsCalendar, and overdue schedule stays a check-in", async () => {
+    const fixture = await seed();
+    const cookie = cookieFor(fixture.user.id);
+    const past = new Date(Date.now() - 60_000).toISOString();
+    const future = new Date(Date.now() + 86_400_000).toISOString();
+    const link = "https://calendar.google.com/calendar/event?eid=abc";
+
+    const created = await postTask(
+      null,
+      { teamId: fixture.team.id, title: "Book it", action: "schedule", dueAt: future },
+      undefined,
+      cookie,
+    );
+    assert.equal(created.status, 201);
+    const missing = fullTask(created.json);
+    assert.equal(missing.needsCalendar, true);
+    assert.equal(missing.calendarEventId, null);
+
+    const bare = await postTask(
+      null,
+      { teamId: fixture.team.id, title: "No time", action: "schedule", calendarEventId: "evt-bare" },
+      undefined,
+      cookie,
+    );
+    assert.equal(bare.status, 400);
+    assert.equal(errorBody(bare.json).code, "due_at_required");
+
+    const linkedResponse = await call(null, "PATCH", `/tasks/${missing.id}`, { calendarEventId: link }, undefined, cookie);
+    assert.equal(linkedResponse.status, 200);
+    const linked = fullTask(linkedResponse.json);
+    assert.equal(linked.needsCalendar, false);
+    assert.equal(linked.calendarEventId, link);
+
+    const clearedTime = await call(null, "PATCH", `/tasks/${missing.id}`, { dueAt: null }, undefined, cookie);
+    assert.equal(clearedTime.status, 400);
+    assert.equal(errorBody(clearedTime.json).code, "due_at_required");
+
+    const unlinked = fullTask(
+      (await call(null, "PATCH", `/tasks/${missing.id}`, { calendarEventId: null }, undefined, cookie)).json,
+    );
+    assert.equal(unlinked.needsCalendar, true);
+    assert.equal(unlinked.calendarEventId, null);
+
+    const relinked = fullTask(
+      (await call(null, "PATCH", `/tasks/${missing.id}`, { calendarEventId: "evt-1" }, undefined, cookie)).json,
+    );
+    assert.equal(relinked.needsCalendar, false);
+    assert.equal(relinked.calendarEventId, "evt-1");
+
+    const overdueOpen = fullTask(
+      (
+        await postTask(fixture.secret, {
+          teamId: fixture.team.id,
+          title: "Passed, no event yet",
+          action: "schedule",
+          dueAt: past,
+        })
+      ).json,
+    );
+    assert.equal(overdueOpen.needsCalendar, true);
+    const overdueLinked = fullTask(
+      (
+        await postTask(fixture.secret, {
+          teamId: fixture.team.id,
+          title: "Passed, event attached",
+          action: "schedule",
+          calendarEventId: "evt-past",
+          dueAt: past,
+        })
+      ).json,
+    );
+    assert.equal(overdueLinked.needsCalendar, false);
+    const ahead = fullTask(
+      (
+        await postTask(fixture.secret, {
+          teamId: fixture.team.id,
+          title: "Still ahead",
+          action: "schedule",
+          calendarEventId: "evt-ahead",
+          dueAt: future,
+        })
+      ).json,
+    );
+
+    const needs = await call(fixture.secret, "GET", "/tasks?action=schedule&status=open&needsCalendar=true");
+    assert.equal(needs.status, 200);
+    const needIds = taskIds(needs.json);
+    assert.equal(needIds.includes(overdueOpen.id), true);
+    assert.equal(needIds.includes(missing.id), false);
+    assert.equal(needIds.includes(overdueLinked.id), false);
+    assert.equal(needIds.includes(ahead.id), false);
+
+    const linkedOnly = taskIds(
+      (await call(fixture.secret, "GET", "/tasks?action=schedule&status=open&needsCalendar=false")).json,
+    );
+    assert.equal(linkedOnly.includes(overdueLinked.id), true);
+    assert.equal(linkedOnly.includes(ahead.id), true);
+    assert.equal(linkedOnly.includes(missing.id), true);
+    assert.equal(linkedOnly.includes(overdueOpen.id), false);
+
+    const bad = await call(fixture.secret, "GET", "/tasks?needsCalendar=maybe");
+    assert.equal(bad.status, 400);
+    assert.equal(errorBody(bad.json).code, "invalid_query");
+
+    const human = new Set(taskIds((await call(null, "GET", "/tasks/do-immediately", undefined, undefined, cookie)).json));
+    assert.equal(human.has(overdueOpen.id), true);
+    assert.equal(human.has(overdueLinked.id), true);
+    assert.equal(human.has(ahead.id), false);
+    assert.equal(human.has(missing.id), false);
+
+    const bot = new Set(taskIds((await call(fixture.secret, "GET", "/tasks/do-immediately")).json));
+    assert.equal(bot.has(overdueOpen.id), true);
+    assert.equal(bot.has(overdueLinked.id), true);
+    assert.equal(bot.has(ahead.id), false);
+    assert.equal(bot.has(missing.id), false);
+
+    const doing = fullTask(
+      (
+        await postTask(fixture.secret, {
+          teamId: fixture.team.id,
+          title: "Now",
+          action: "do_now",
+          calendarEventId: "evt-now",
+        })
+      ).json,
+    );
+    assert.equal(doing.needsCalendar, false);
+    const toSchedule = await call(fixture.secret, "PATCH", `/tasks/${doing.id}`, { action: "schedule" });
+    assert.equal(toSchedule.status, 400);
+    assert.equal(errorBody(toSchedule.json).code, "due_at_required");
+
+    const via = toolJson(
+      await rpc(fixture.secret, "tools/call", {
+        name: "update_task",
+        arguments: { id: overdueOpen.id, calendarEventId: "evt-from-bot", dueAt: future },
+      }),
+    ) as { needsCalendar: boolean; calendarEventId: string | null };
+    assert.equal(via.needsCalendar, false);
+    assert.equal(via.calendarEventId, "evt-from-bot");
+
+    const listed = await rpc(fixture.secret, "tools/list");
+    const tools = (rpcResult(listed.json) as { tools: { name: string; description?: string }[] }).tools;
+    const description = (name: string) => tools.find((tool) => tool.name === name)?.description ?? "";
+    assert.match(description("list_tasks"), /needsCalendar/);
+    assert.match(description("create_task"), /calendarEventId/);
+    assert.match(description("list_do_immediately"), /check-in/);
+  });
 });
 
 async function seed() {
@@ -1298,6 +1446,7 @@ function fullTask(json: unknown) {
   const task = taskBody(json) as ReturnType<typeof taskBody> & {
     action: string;
     waitingOn: string | null;
+    calendarEventId: string | null;
     needsCalendar: boolean;
     dueAt: string | null;
     status: string;

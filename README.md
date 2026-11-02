@@ -159,7 +159,11 @@ A task:
 
 `DELETE /tasks/:id` removes the row. That is for a mistake or a duplicate. The response is `{ "id": "…", "deleted": true }`. A second delete is **404**. Deleting the task also deletes its idempotency row, so the same `Idempotency-Key` can create a new task. Another team's token gets **403**.
 
-`calendarEventId` is an optional calendar event id. The server keeps `needsCalendar` in line with it: a `schedule` task with no id is stored with `needsCalendar` true, and any id forces `needsCalendar` false. You can omit `needsCalendar`.
+`calendarEventId` is an optional calendar event id or an http(s) calendar URL, such as a Google Calendar event link. The server keeps `needsCalendar` in line with it: a `schedule` task with no id is stored with `needsCalendar` true, and any id or URL forces `needsCalendar` false. You can omit `needsCalendar`. Hearth does not create the Google Calendar event. A bot creates it with its own calendar connector and sends the event id or the event link. A person pastes that link on the task sheet. The sheet and the list open it. An event id opens Google Calendar's event editor; a pasted URL opens as given.
+
+A `schedule` task with a `calendarEventId` must also have `dueAt`. That is the event time used for check-in. There is no separate end time: set `dueAt` to the end if check-in should wait until the event is over. Create or update without `dueAt` is **400** `due_at_required`. An open schedule task is a check-in once `dueAt` is in the past, whether or not a calendar is attached (`needsCheckIn`). Complete it, cancel it, or reschedule by updating `dueAt` and `calendarEventId`. No extra status.
+
+`GET /tasks?action=schedule&status=open&needsCalendar=true` is the open work that still needs a calendar. `GET /tasks?action=schedule&status=open&dueBefore=<now>` is the check-in set. A bot token's `GET /tasks/do-immediately` includes both for tasks that token owns. A person's morning queue includes both for every owner, so James can attach a calendar or check in, and the owning bot still sees its own. Another registered bot is `owner=bot:<id>` on `list_tasks`, with `needsCalendar=true` or `dueBefore` now.
 
 `project` and `area` are `{ "id", "name" }` or null. A project is a multi-step outcome. An area is a life or work domain, such as House or Finance. They are separate. Set them with `projectId` and `areaId` (a uuid on that team, or null to clear). Omit either on update to leave it unchanged. The old free-text `project` string is rejected.
 
@@ -184,13 +188,13 @@ For Gmail, `href` is the thread URL from the Gmail address bar: `https://mail.go
 
 `create_task` and `update_task` take this same `source`. `list_tasks`, `GET /tasks`, `GET /tasks/do-immediately`, create, update, complete, cancel, delete, and the SSE `task` object all include it. On a `deleted` event from another API process, `task` is null.
 
-`GET /tasks` query: `teamId`, `action`, `status` (`open`, `done`, or `cancelled`), `important`, `urgent`, `owner` (`user:<uuid>` or `bot:<uuid>`), `dueBefore`, `projectId`, `areaId`, `mine`. `lane` is rejected, and so is the old `project` string. Humans who omit `teamId` get every team they belong to. A bot who omits `teamId` is limited to its token's team. Passing another team returns 403.
+`GET /tasks` query: `teamId`, `action`, `status` (`open`, `done`, or `cancelled`), `important`, `urgent`, `needsCalendar` (`true` or `false`), `owner` (`user:<uuid>` or `bot:<uuid>`), `dueBefore`, `projectId`, `areaId`, `mine`. `lane` is rejected, and so is the old `project` string. Humans who omit `teamId` get every team they belong to. A bot who omits `teamId` is limited to its token's team. Passing another team returns 403.
 
 `GET /tasks/do-immediately` depends on who is signed in. Optional `teamId`. Done, cancelled, and `later` stay out, including future steps on a project. Order for both: important and urgent, then important, then urgent, then the rest; within that, `dueAt` ascending with nulls last; then `updatedAt` descending.
 
-A human gets the morning queue: open `do_now` tasks, `schedule` tasks that still need a calendar or have a `dueAt` in the past, and `delegate` tasks whose owner is not a bot and whose follow-up is at or before now (or no `dueAt` and `createdAt` more than three days ago). Bot-owned delegates stay out of that queue. They are the bot's work, not a nudge that James is waiting on Tara or the CRA.
+A human gets the morning queue: open `do_now` tasks, `schedule` tasks that still need a calendar or are a check-in (`dueAt` in the past), and `delegate` tasks whose owner is not a bot and whose follow-up is at or before now (or no `dueAt` and `createdAt` more than three days ago). Bot-owned delegates stay out of that queue. They are the bot's work, not a nudge that James is waiting on Tara or the CRA. Bot-owned schedule tasks stay in, so James can attach the calendar or check in.
 
-A bot token gets its own open work: `delegate` tasks owned by that token, at any follow-up, plus `schedule` tasks that token owns which still need a calendar or are overdue. `do_now` stays human work and is not included. Another registered bot (Fin, Rally) is not the token. List that bot's open delegate work with `GET /tasks?action=delegate&status=open&owner=bot:<id>`.
+A bot token gets its own open work: `delegate` tasks owned by that token, at any follow-up, plus `schedule` tasks that token owns which still need a calendar or are a check-in. `do_now` stays human work and is not included. Another registered bot (Fin, Rally) is not the token. List that bot's open delegate work with `GET /tasks?action=delegate&status=open&owner=bot:<id>`. List that bot's schedule check-ins with `action=schedule`, `status=open`, `owner=bot:<id>`, and `dueBefore` now. List the ones that still need a calendar with `needsCalendar=true` instead of `dueBefore`.
 
 Other routes humans use from the app: `GET /auth/config`, `POST /auth/dev`, `GET /auth/google`, `GET /auth/me`, `POST /auth/logout`, `GET /teams`, `POST /teams`, `GET /teams/:id`, `GET /teams/:id/events`, `POST /teams/:id/members`, `GET|POST /teams/:id/bots`, `DELETE /teams/:id/bots/:botId`, `GET|POST /teams/:id/projects`, `PATCH /teams/:id/projects/:projectId`, `GET|POST /teams/:id/areas`, `PATCH /teams/:id/areas/:areaId`, `GET|POST /teams/:id/tokens`, `DELETE /teams/:id/tokens/:tokenId`.
 
@@ -353,4 +357,4 @@ Schema changes need a new SQL file under `apps/api/drizzle` and a matching entry
 
 ## Not in v1
 
-File attachments, live Google Calendar create/sync, outbound webhooks, and native apps. A task can store a calendar event id, a source link (email or any http(s) URL), and a project and an area. Railway config is in the repo; this repo does not create or deploy the Railway project.
+File attachments, live Google Calendar create/sync, outbound webhooks, and native apps. A task can store a calendar event id or calendar URL, a source link (email or any http(s) URL), and a project and an area. Railway config is in the repo; this repo does not create or deploy the Railway project.

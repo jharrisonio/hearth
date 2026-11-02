@@ -362,6 +362,7 @@ async function checkActions(cookie: string, teamId: string, stamp: string) {
     important: false,
     urgent: false,
     calendarEventId: "evt-override",
+    dueAt: future,
   });
   const suggestedDelegate = await make("suggest-delegate", { urgent: true, waitingOn: "the council" });
   const suggestedSchedule = await make("suggest-schedule", { important: true, urgent: false });
@@ -416,11 +417,26 @@ async function checkActions(cookie: string, teamId: string, stamp: string) {
   assert(ids.has(delegateDue.id), "due delegate is in the morning queue");
   assert(!ids.has(delegateDefault.id), "fresh delegate follow-up leaked into the morning queue");
   assert(!ids.has(later.id), "later leaked into the morning queue");
-  assert(!ids.has(override.id), "linked schedule with no due date leaked into the morning queue");
+  assert(!ids.has(override.id), "future linked schedule stays out of the morning queue");
   assert(!ids.has(suggestedDelegate.id), "suggested delegate with a future follow-up leaked");
   assert(ids.has(suggestedSchedule.id), "suggested schedule is in the morning queue");
   assert(!ids.has(suggestedLater.id), "suggested later leaked into the morning queue");
   assert(ids.has(suggestedNow.id), "suggested do_now is in the morning queue");
+  expectStatus(
+    await call(cookie, "POST", "/tasks", {
+      teamId,
+      title: `${stamp} calendar-without-when`,
+      action: "schedule",
+      calendarEventId: "evt-no-due",
+    }),
+    400,
+    "linked schedule without dueAt",
+  );
+  expectStatus(
+    await call(cookie, "PATCH", `/tasks/${scheduleFuture.id}`, { dueAt: null }),
+    400,
+    "clearing dueAt on a linked schedule",
+  );
 
   const linked = expectStatus(
     await call(cookie, "PATCH", `/tasks/${scheduleNeeds.id}`, { calendarEventId: "evt-added" }),
