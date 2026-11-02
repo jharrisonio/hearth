@@ -228,9 +228,36 @@ describe("task surface", { concurrency: 1 }, () => {
       clientInfo: { name: "hearth-test", version: "0" },
     });
     assert.equal(init.status, 200);
-    const initResult = rpcResult(init.json) as { serverInfo?: { name?: string }; capabilities?: { tools?: unknown } };
+    const initResult = rpcResult(init.json) as {
+      serverInfo?: { name?: string };
+      capabilities?: { tools?: unknown };
+      instructions?: string;
+    };
     assert.equal(initResult.serverInfo?.name, "hearth");
     assert.ok(initResult.capabilities?.tools);
+    const instructions = initResult.instructions ?? "";
+    for (const phrase of [
+      "Personal and household never mix",
+      "Spare",
+      "Do now, Delegate, Schedule, and Later",
+      "Do not present Important or Urgent",
+      "do_now is a human owner",
+      "waitingOn null",
+      "calendarEventId",
+      "needsCalendar",
+      "inMorningQueue",
+      "inBotQueue",
+      "Idempotency-Key",
+      "short outcome",
+      "source link",
+      "soft cancel",
+      "hard delete",
+      "still open",
+      "one next action",
+    ]) {
+      assert.match(instructions, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    }
+    assert.equal(instructions.replaceAll("cancelled", "").includes("canceled"), false);
 
     const listed = await rpc(fixture.secret, "tools/list");
     const listedTools = (rpcResult(listed.json) as { tools: { name: string; description?: string }[] }).tools;
@@ -242,6 +269,7 @@ describe("task surface", { concurrency: 1 }, () => {
       "create_project",
       "create_task",
       "delete_task",
+      "hearth_help",
       "list_areas",
       "list_do_immediately",
       "list_projects",
@@ -260,6 +288,13 @@ describe("task surface", { concurrency: 1 }, () => {
     assert.match(description("create_project"), /notes/);
     assert.match(description("update_project"), /notes/);
     assert.match(description("list_projects"), /notes/);
+    assert.match(description("complete_task"), /short outcome/);
+    assert.match(description("hearth_help"), /initialize/);
+    const help = rpcResult(
+      (await rpc(fixture.secret, "tools/call", { name: "hearth_help", arguments: {} })).json,
+    ) as { isError?: boolean; content?: { text?: string }[] };
+    assert.notEqual(help.isError, true);
+    assert.equal(help.content?.[0]?.text, instructions);
 
     const cookie = cookieFor(fixture.user.id);
     const registeredResponse = await call(null, "POST", `/teams/${fixture.team.id}/bots`, {

@@ -38,6 +38,20 @@ type TeamResolution = { teamId: string } | { failure: ApiResult };
 const SERVER_VERSION = "0.1.0";
 
 /**
+ * Standing rules for every connected bot. Returned on MCP initialize and from hearth_help.
+ * One string, so a client that surfaces instructions and a client that calls the tool get the same text.
+ */
+const MCP_INSTRUCTIONS = [
+  "Standing rules for every connected Hearth bot. Follow them without a pasted brief. hearth_help returns this same text.",
+  "Teams. This token only sees lists it was granted. Personal and household never mix: do not copy or mirror a task from one list onto the other. Spare and other work stay out of Hearth unless James says to put that item here.",
+  "Actions. Set action to do_now, delegate, schedule, or later. Present those to people as Do now, Delegate, Schedule, and Later. Do not present Important or Urgent as labels. Those flags only sort the queue. Omitting action stores a suggestion from the flags; set the action yourself. do_now is a human owner doing it. delegate is a bot or an outsider. A bot owner has waitingOn null, because the bot is who acts. An outsider needs waitingOn, the person or office you are waiting on. Omit owner and this token becomes the owner. Hand work to another bot with a registered bot id. schedule needs dueAt, the event time, and calendarEventId. Hearth does not create the Google event. Create it with your calendar connector, then PATCH calendarEventId and dueAt. Until calendarEventId is set, needsCalendar stays true. An open schedule with dueAt in the past is a check-in: complete_task, cancel_task, or update dueAt and calendarEventId. later is a future or dependent step. It stays out of both morning queues until the action changes.",
+  "Projects and areas. A project is a multi-step outcome. An area is a life domain such as House or Finance. Link them with projectId and areaId. A task title is one next action, not the whole outcome. On a project, do_now, delegate, and schedule are active next actions and several may run at once. Future steps are separate tasks with action later. Project notes hold the plan, not the step list.",
+  "Queues. list_do_immediately follows the caller and matches the implementation. A human morning queue is inMorningQueue: open do_now; open schedule that still needs a calendar or is a check-in (dueAt strictly in the past); and delegate tasks whose owner is not a bot when dueAt is due or overdue, or when dueAt is empty and the task is more than three days old. Bot-owned delegates stay out of that queue. Bot-owned schedule tasks stay in, so a person can attach the calendar or check in. A bot morning queue is inBotQueue: open delegate tasks this token owns, at any dueAt, plus schedule tasks this token owns that still need a calendar or are a check-in. do_now stays on the human queue. Another bot's delegate work is list_tasks with action=delegate, status=open, and owner=bot:<id>. That bot's check-ins use action=schedule, status=open, owner=bot:<id>, and dueBefore now. List the ones that still need a calendar with needsCalendar=true instead of dueBefore.",
+  "Capture and finish. Pass idempotencyKey on create_task. It is sent as Idempotency-Key. The same key and body, for this bot, return the original task for 24 hours. A different body with that key is rejected. Prefer a source link when the task came from an email or a page: { type: \"email\" | \"url\", href, label?, externalId? }. href is an http(s) URL. For Gmail, href is https://mail.google.com/mail/u/0/#all/<threadId> and externalId is the message or thread id. Pass source: null on update_task to clear it. When you finish the work, call complete_task in the same turn with a short outcome. cancel_task is a soft cancel and keeps the row, with an outcome (the default is \"cancelled\"). delete_task is a hard delete for a mistake or a duplicate. Archiving a project is rejected while any task on it is still open. Complete or cancel those tasks first.",
+  "Bot owners are named when Hearth is connected, or later in Settings. Use a registered bot id as owner. Reconnecting is not required to add, rename, or retire an owner. Live edits are not pushed over MCP. Subscribe with GET /teams/:teamId/events (text/event-stream, same Bearer token). Read the hearth://task-events resource for the exact URL and the event shape.",
+].join("\n\n");
+
+/**
  * Stateless Streamable HTTP on POST /mcp. JSON responses, no SSE stream.
  * Every request needs the same bot Bearer token as the REST API. Tools call
  * the task routes in-process, so validation and idempotency stay in one place.
@@ -55,10 +69,7 @@ export async function handleMcp(c: Context, app: FetchApp): Promise<Response> {
 
   const server = new McpServer(
     { name: "hearth", version: SERVER_VERSION },
-    {
-      instructions:
-        "Hearth tasks for the teams this token may manage. Pass idempotencyKey on create_task when a retry must return the original task instead of a duplicate. The key lasts 24 hours for this bot. A project is a multi-step outcome; an area is a life or work domain such as House or Finance. Link them with projectId and areaId. On a project, do_now, delegate, and schedule are active next actions and several may run at once. Future or dependent steps are separate tasks with action later. Project notes hold the plan, not the step list. Later steps stay out of list_do_immediately. Bot owners are named when Hearth is connected, or later in Settings. Use a registered bot id as owner. Omit owner and this token becomes the owner. Reconnecting is not required to add, rename, or retire an owner. waitingOn is required on a delegate task unless the owner is a bot. list_do_immediately for this token is open delegate tasks this token owns, plus schedule tasks this token owns that still need a calendar or are due for check-in (dueAt in the past, calendar attached or not). calendarEventId is an event id or an http(s) calendar URL and clears needsCalendar. Hearth does not create the Google event. A linked schedule needs dueAt, the event time. Check-in is an open schedule with dueAt in the past: complete_task, cancel_task, or update dueAt and calendarEventId. list_tasks filters needsCalendar. Another registered bot's delegate work is list_tasks with action=delegate, status=open, and owner=bot:<id>. That bot's schedule check-ins use action=schedule, status=open, owner=bot:<id>, and dueBefore now. Set source to { type: \"email\" | \"url\", href, label?, externalId? } to link the originating email or page. For Gmail, href is https://mail.google.com/mail/u/0/#all/<threadId> and externalId is the message or thread id. Pass source: null on update_task to clear it. cancel_task keeps the row for audit. delete_task removes a mistake or duplicate. Live edits are not pushed over MCP. Subscribe with GET /teams/:teamId/events (text/event-stream, same Bearer token). Read the hearth://task-events resource for the exact URL and the event shape.",
-    },
+    { instructions: MCP_INSTRUCTIONS },
   );
   registerTaskTools(server, app, authorization ?? "");
   registerTaskEventsResource(server, app, authorization ?? "");
@@ -117,10 +128,20 @@ async function taskEventsText(app: FetchApp, authorization: string) {
 
 function registerTaskTools(server: McpServer, app: FetchApp, authorization: string) {
   server.registerTool(
+    "hearth_help",
+    {
+      description:
+        "Return the standing Hearth rules (teams, actions, queues, and how to finish). Same text as the server instructions on initialize. Read-only. Call it when those instructions were not included in the session.",
+      annotations: { readOnlyHint: true },
+    },
+    async () => ({ content: [{ type: "text" as const, text: MCP_INSTRUCTIONS }] }),
+  );
+
+  server.registerTool(
     "create_task",
     {
       description:
-        "Create one task (POST /tasks), one project step per call. Active next actions are action do_now, delegate, or schedule — several may share a project. Future or dependent steps use action later unless that step is explicitly active. Omit action to take the important × urgent suggestion (neither suggests later). idempotencyKey is sent as the Idempotency-Key header. The same key and body, for this bot, returns the original task for 24 hours. A different body with that key is rejected. owner, when type bot, must be a bot registered on the team, this token, or the connector grant. waitingOn is required when action is delegate and the owner is not a bot. A bot owner may omit waitingOn. Omit owner and this token becomes the owner. projectId and areaId link a project or an area on the same team. source, when set, is { type: \"email\" | \"url\", href, label?, externalId? }. href is an http(s) URL. For Gmail, type is email and href is the mail.google.com deep link. calendarEventId is an event id or an http(s) calendar URL. On a schedule task it clears needsCalendar, and dueAt (the event time) is required with it.",
+        "Create one task (POST /tasks), one project step per call. The title is one next action on one team. do_now is a human owner. Present Do now, Delegate, Schedule, or Later, not Important or Urgent. Prefer a source link. Active next actions are action do_now, delegate, or schedule — several may share a project. Future or dependent steps use action later unless that step is explicitly active. Omit action to take the important × urgent suggestion (neither suggests later). idempotencyKey is sent as the Idempotency-Key header. The same key and body, for this bot, returns the original task for 24 hours. A different body with that key is rejected. owner, when type bot, must be a bot registered on the team, this token, or the connector grant. waitingOn is required when action is delegate and the owner is not a bot. A bot owner may omit waitingOn. Omit owner and this token becomes the owner. projectId and areaId link a project or an area on the same team. source, when set, is { type: \"email\" | \"url\", href, label?, externalId? }. href is an http(s) URL. For Gmail, type is email and href is the mail.google.com deep link. calendarEventId is an event id or an http(s) calendar URL. On a schedule task it clears needsCalendar, and dueAt (the event time) is required with it. Hearth does not create the Google event. Create it, then send the id or URL with dueAt.",
       inputSchema: createTaskToolSchema,
     },
     async ({ idempotencyKey, ...body }) => {
@@ -139,7 +160,7 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "update_task",
     {
       description:
-        "Update a task (PATCH /tasks/:id). Set action to move a project step between an active front (do_now, delegate, schedule) and later. Several active fronts on one project are allowed. Status cannot be changed here. Complete the task with complete_task, or cancel it with cancel_task. owner, when type bot, must be a bot registered on the team, this token, or the connector grant. waitingOn is required when the task is delegate and the owner is not a bot. A bot owner may set waitingOn to null. Pass projectId or areaId as a uuid to set that link, or null to clear it. Omit either field to leave it unchanged. source replaces the link; null clears it. Omit source to leave the link unchanged. calendarEventId sets the event id or calendar URL, or null to clear it. A schedule task with a calendar event needs dueAt.",
+        "Update a task (PATCH /tasks/:id). Set action to move a project step between an active front (do_now, delegate, schedule) and later. do_now is a human owner. Several active fronts on one project are allowed. Status cannot be changed here. Complete the task with complete_task, or cancel it with cancel_task. owner, when type bot, must be a bot registered on the team, this token, or the connector grant. waitingOn is required when the task is delegate and the owner is not a bot. A bot owner may set waitingOn to null. Pass projectId or areaId as a uuid to set that link, or null to clear it. Omit either field to leave it unchanged. source replaces the link; null clears it. Omit source to leave the link unchanged. calendarEventId sets the event id or calendar URL after you create the Google event, or null to clear it. A schedule task with a calendar event needs dueAt.",
       inputSchema: updateTaskToolSchema,
     },
     async ({ id, ...patch }) => {
@@ -155,7 +176,8 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
   server.registerTool(
     "complete_task",
     {
-      description: "Mark a task done and record what happened (POST /tasks/:id/complete).",
+      description:
+        "Mark a task done and record a short outcome in the same turn you finish the work (POST /tasks/:id/complete).",
       inputSchema: completeTaskToolSchema,
     },
     async ({ id, outcome }) =>
@@ -170,7 +192,7 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "cancel_task",
     {
       description:
-        'Cancel a task and keep the row (POST /tasks/:id/cancel). Optional outcome; the default is "cancelled". The task leaves open lists and the morning queue. Emits a cancelled event.',
+        'Soft-cancel a task and keep the row (POST /tasks/:id/cancel). Optional outcome; the default is "cancelled". The task leaves open lists and the morning queue. Emits a cancelled event. Use this rather than delete_task when the work simply stopped.',
       inputSchema: cancelTaskToolSchema,
     },
     async ({ id, outcome }) => {
@@ -187,7 +209,7 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "delete_task",
     {
       description:
-        "Permanently delete a task (DELETE /tasks/:id). For a mistake or a duplicate. Emits a deleted event. The row is gone, and an Idempotency-Key that pointed at it can be used again.",
+        "Hard-delete a task (DELETE /tasks/:id). For a mistake or a duplicate, not for work that stopped. Emits a deleted event. The row is gone, and an Idempotency-Key that pointed at it can be used again.",
       inputSchema: deleteTaskToolSchema,
     },
     async ({ id }) =>
@@ -208,7 +230,7 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "list_do_immediately",
     {
       description:
-        "Open work for the caller (GET /tasks/do-immediately). This token receives open delegate tasks it owns, plus schedule tasks it owns that still need a calendar or are due for check-in (dueAt in the past, calendar attached or not). It does not include do_now or another bot's tasks. A human receives the morning queue: open do_now, schedule that still needs a calendar or is due for check-in, and overdue delegate follow-ups whose owner is not a bot. Done, cancelled, and action later stay out, including future steps on a project. Optional teamId.",
+        "Open work for the caller (GET /tasks/do-immediately). This token receives inBotQueue: open delegate tasks it owns, plus schedule tasks it owns that still need a calendar or are due for check-in (dueAt in the past, calendar attached or not). It does not include do_now or another bot's tasks. A human receives inMorningQueue: open do_now, schedule that still needs a calendar or is due for check-in, and overdue delegate follow-ups whose owner is not a bot. Done, cancelled, and action later stay out, including future steps on a project. Optional teamId.",
       inputSchema: doImmediatelyQuerySchema,
     },
     async (query) =>
@@ -238,7 +260,7 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "update_project",
     {
       description:
-        "Update a project (PATCH /teams/:id/projects/:id). Change name, notes, areaId, or archived. Null notes clears the plan. Null areaId clears the area. archived true completes the project and is rejected while any task on it is still open. Steps stay tasks. Omit teamId when this token belongs to one team.",
+        "Update a project (PATCH /teams/:id/projects/:id). Change name, notes, areaId, or archived. Null notes clears the plan. Null areaId clears the area. archived true completes the project and is rejected while any task on it is still open. Complete or cancel those tasks first. Steps stay tasks. Omit teamId when this token belongs to one team.",
       inputSchema: updateProjectToolSchema,
     },
     async ({ id, teamId, ...patch }) => {
