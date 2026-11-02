@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: Inter, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-sans: "Helvetica Neue", Helvetica, Inter, Arial, sans-serif;
 }
 
 html,
@@ -18,32 +18,57 @@ html {
 body {
   margin: 0;
   background: #000;
-  color: #fff;
+  color: #f2f2f2;
   font-family: var(--font-sans);
-  font-weight: 400;
+  font-weight: 300;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 
-button,
-input,
-textarea,
-select {
-  font: inherit;
-  color: inherit;
-}
+@layer base {
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+    color: inherit;
+  }
 
-button:focus-visible,
-a:focus-visible {
-  outline: none;
-  text-decoration-line: underline;
-  text-underline-offset: 4px;
-}
+  button,
+  a {
+    cursor: pointer;
+  }
 
-input:focus-visible,
-textarea:focus-visible,
-select:focus-visible {
-  outline: none;
+  button:disabled {
+    cursor: default;
+  }
+
+  button:focus-visible,
+  a:focus-visible {
+    outline: 1px solid #fff;
+    outline-offset: 4px;
+  }
+
+  input:focus-visible,
+  textarea:focus-visible,
+  select:focus-visible {
+    outline: none;
+  }
+
+  select {
+    cursor: pointer;
+  }
+
+  select option {
+    background: #000;
+    color: #eee;
+  }
+
+  input[type="checkbox"] {
+    accent-color: #fff;
+    width: 14px;
+    height: 14px;
+  }
 }
 
 ::selection {
@@ -55,4 +80,56 @@ input:-webkit-autofill {
   -webkit-text-fill-color: #fff;
   caret-color: #fff;
   box-shadow: 0 0 0 1000px #000 inset;
+}
+
+@keyframes hearth-fade {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes hearth-sheet {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes hearth-pop {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.hearth-fade {
+  animation: hearth-fade 0.22s cubic-bezier(0.2, 0.6, 0.2, 1);
+}
+
+.hearth-sheet {
+  animation: hearth-sheet 0.24s cubic-bezier(0.2, 0.6, 0.2, 1);
+}
+
+.hearth-pop {
+  animation: hearth-pop 0.22s cubic-bezier(0.2, 0.6, 0.2, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
 }

@@ -4,18 +4,19 @@ import type { ButtonHTMLAttributes } from "react";
 import { cn } from "@/lib/cn";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 text-[13px] transition disabled:pointer-events-none disabled:opacity-40",
+  "inline-flex items-center justify-center text-[10px] font-normal uppercase tracking-[0.32em] transition-[color,opacity] duration-150 ease-[cubic-bezier(0.2,0.6,0.2,1)] active:opacity-35 disabled:pointer-events-none disabled:opacity-40",
   {
     variants: {
       variant: {
-        default: "text-white underline-offset-4 hover:underline",
-        secondary: "text-white/50 hover:text-white",
-        ghost: "text-white/50 hover:text-white",
-        danger: "text-white/50 hover:text-white",
+        default: "py-3 text-[#8a8a8a] hover:text-white",
+        solid: "bg-white px-[26px] py-3.5 text-black! hover:opacity-85",
+        secondary: "py-3 text-[#8a8a8a] hover:text-white",
+        ghost: "py-3 text-[#8a8a8a] hover:text-white",
+        danger: "py-3 text-[#8a8a8a] hover:text-white",
       },
       size: {
-        default: "py-1",
-        sm: "py-1 text-[12px]",
+        default: "",
+        sm: "",
       },
     },
     defaultVariants: { variant: "default", size: "default" },

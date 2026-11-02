@@ -2,15 +2,18 @@ import type { AuthConfig, BotSummary, BotTokenSummary, Member, TeamSummary } fro
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { useAuth } from "@/auth";
-import { CloseIcon } from "@/components/Icons";
+import { CloseIcon, iconButtonClass } from "@/components/Icons";
 import { Button } from "@/components/ui/button";
 import { ApiError, api } from "@/lib/api";
-import { fieldClass } from "@/lib/field";
+import { cn } from "@/lib/cn";
+import { fieldClass, labelClass, pageTitleClass, sectionClass, subheadClass } from "@/lib/field";
+import { LIST_KEY } from "@/lib/list";
 
 export function Settings() {
   const { teamId } = useParams();
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
+  const [teams, setTeams] = useState<TeamSummary[]>([]);
   const [team, setTeam] = useState<TeamSummary | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [tokens, setTokens] = useState<BotTokenSummary[]>([]);
@@ -19,6 +22,7 @@ export function Settings() {
   const [agentId, setAgentId] = useState("");
   const [botName, setBotName] = useState("");
   const [label, setLabel] = useState("");
+  const [listName, setListName] = useState("");
   const [secret, setSecret] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -48,6 +52,7 @@ export function Settings() {
       .teams()
       .then(({ teams: next }) => {
         if (cancelled) return;
+        setTeams(next);
         if (!teamId) {
           const id = next.find((item) => item.kind === "household")?.id ?? next[0]?.id;
           if (id) navigate(`/teams/${id}`, { replace: true });
@@ -71,8 +76,13 @@ export function Settings() {
   useEffect(() => {
     void api.config().then(setConfig).catch(() => setConfig(null));
   }, []);
+
   const isOwner = team?.role === "owner";
-  const labelClass = "text-[11px] uppercase tracking-[0.16em] text-white/40";
+
+  function openList(id: string) {
+    sessionStorage.setItem(LIST_KEY, id);
+    navigate(`/teams/${id}`);
+  }
 
   async function addMember(event: React.FormEvent) {
     event.preventDefault();
@@ -129,6 +139,22 @@ export function Settings() {
     }
   }
 
+  async function createList(event: React.FormEvent) {
+    event.preventDefault();
+    const name = listName.trim();
+    if (!name) return;
+    setNotice(null);
+    setError(null);
+    try {
+      const created = await api.createTeam(name);
+      setListName("");
+      sessionStorage.setItem(LIST_KEY, created.id);
+      navigate(`/teams/${created.id}`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not create the household.");
+    }
+  }
+
   async function revoke(tokenId: string) {
     setError(null);
     try {
@@ -143,84 +169,140 @@ export function Settings() {
 
   return (
     <div className="min-h-dvh bg-black text-white">
-      <Link to="/" aria-label="Close" className="fixed right-8 top-8 z-10 text-white/70 hover:text-white">
+      <Link to="/" aria-label="Close" className={cn(iconButtonClass, "fixed right-2.5 top-2.5 z-10")}>
         <CloseIcon />
       </Link>
-      <main className="mx-auto max-w-md px-8 pb-24 pt-24">
-        {loading ? <p className="text-[13px] text-white/40">Loading…</p> : null}
-        {error ? <p className="text-[13px] text-white/70">{error}</p> : null}
-        {notice ? <p className="mt-4 text-[13px] text-white/70">{notice}</p> : null}
+      <main className="hearth-sheet mx-auto min-h-dvh w-full max-w-[560px] px-7 pb-20 pt-[92px]">
+        <h1 className={pageTitleClass}>Settings</h1>
+        {loading ? <p className="text-[10px] uppercase tracking-[0.4em] text-[#4a4a4a]">Loading</p> : null}
+        {error ? <p className="mb-6 text-[13px] text-[#c9a35a]">{error}</p> : null}
+        {notice ? <p className="mb-6 text-[13px] text-[#cfcfcf]">{notice}</p> : null}
 
         <section>
-          <h2 className={labelClass}>Global</h2>
-          <h3 className="mt-8 text-[15px]">Google account</h3>
-          <p className="mt-4 text-[15px]">{user?.name}</p>
-          <p className="mt-1 text-[13px] text-white/45">{user?.email}</p>
+          <h2 className={sectionClass}>Global</h2>
+          <h3 className={subheadClass}>Google account</h3>
+          <div className="flex items-baseline justify-between gap-4 border-b border-[#1c1c1c] py-3.5 text-[14px] font-light">
+            <span className="min-w-0 truncate">{user?.email}</span>
+            <span className="shrink-0 text-[13px] text-[#cfcfcf]">Signed in</span>
+          </div>
           {config?.google ? (
-            <button
-              type="button"
-              className="mt-6 text-[13px] text-white/70 hover:text-white"
-              onClick={() => (window.location.href = "/api/auth/google")}
-            >
-              Connect Google
-            </button>
+            <div className="flex items-baseline justify-between gap-4 border-b border-[#1c1c1c] py-3.5 text-[14px]">
+              <span className="text-[#8a8a8a]">Google</span>
+              <button
+                type="button"
+                className="text-[10px] font-normal uppercase tracking-[0.32em] text-[#8a8a8a] hover:text-white"
+                onClick={() => {
+                  window.location.href = "/api/auth/google";
+                }}
+              >
+                Connect
+              </button>
+            </div>
           ) : (
-            <p className="mt-6 text-[13px] text-white/40">Google sign-in is off.</p>
+            <div className="flex items-baseline justify-between gap-4 border-b border-[#1c1c1c] py-3.5 text-[14px]">
+              <span className="text-[#8a8a8a]">Google sign-in</span>
+              <span className="text-[13px] text-[#666]">Off</span>
+            </div>
           )}
-          <button type="button" className="mt-4 block text-[13px] text-white/45 hover:text-white" onClick={() => void signOut()}>
+          <button
+            type="button"
+            className="mt-6 text-[10px] font-normal uppercase tracking-[0.32em] text-[#8a8a8a] hover:text-white"
+            onClick={() => void signOut()}
+          >
             Sign out
           </button>
+
+          <h3 className={subheadClass}>Your lists</h3>
+          <ul>
+            {teams.map((item) => {
+              const current = item.id === team?.id;
+              return (
+                <li key={item.id} className="border-b border-[#1c1c1c]">
+                  <button
+                    type="button"
+                    onClick={() => openList(item.id)}
+                    className="flex w-full items-baseline justify-between gap-4 py-3.5 text-left text-[14px] font-light"
+                  >
+                    <span className={current ? "text-white" : "text-[#ccc]"}>
+                      {current ? <span className="mr-2 text-[8px] text-[#9c9]">●</span> : null}
+                      {item.name}
+                    </span>
+                    <span className="shrink-0 text-[12px] text-[#666]">{item.kind}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          <form onSubmit={(event) => void createList(event)} className="mt-2 flex items-end gap-4">
+            <label className="block min-w-0 flex-1">
+              <span className="sr-only">New list name</span>
+              <input
+                className={fieldClass}
+                value={listName}
+                placeholder="New list name"
+                onChange={(event) => setListName(event.target.value)}
+              />
+            </label>
+            <Button type="submit">Create</Button>
+          </form>
         </section>
 
         {team ? (
-          <section className="mt-16">
-            <h2 className={labelClass}>Current list</h2>
-            <h3 className="mt-8 text-[15px]">{team.name}</h3>
-            <p className="mt-2 text-[13px] text-white/40">
+          <section className="mt-[72px]">
+            <h2 className={sectionClass}>This list — {team.name}</h2>
+            <p className="mt-4 text-[12px] font-light text-[#666]">
               {team.kind === "personal" ? "Personal" : "Household"} / {team.role === "owner" ? "Owner" : "Member"}
             </p>
-            <h4 className={`mt-10 ${labelClass}`}>Members</h4>
-            <p className="mt-3 text-[13px] text-white/45">
+
+            <h3 className={subheadClass}>Members</h3>
+            <p className="mb-2 text-[13px] font-light text-[#5c5c5c]">
               {team.kind === "personal"
                 ? "A personal list stays with you. Bots you grant can still post here."
                 : "Members can see and update household tasks. Only an owner can invite or mint tokens."}
             </p>
-            <ul className="mt-6 space-y-4">
+            <ul>
               {members.map((member) => (
-                <li key={member.userId} className="text-[15px]">
-                  {member.name}
-                  <span className="mt-1 block text-[12px] text-white/40">{member.email}</span>
-                  <span className={`mt-1 block ${labelClass}`}>{member.role}</span>
+                <li
+                  key={member.userId}
+                  className="flex items-baseline justify-between gap-4 border-b border-[#1c1c1c] py-3.5 text-[14px] font-light"
+                >
+                  <span className="min-w-0">
+                    {member.name} <span className="text-[#666]">{member.email}</span>
+                  </span>
+                  <span className="shrink-0 text-[12px] text-[#666]">{member.role}</span>
                 </li>
               ))}
             </ul>
             {isOwner && team.kind === "household" ? (
-              <form onSubmit={(event) => void addMember(event)} className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-end">
-                <label className={`block flex-1 ${labelClass}`}>
-                  Email
+              <form onSubmit={(event) => void addMember(event)} className="mt-2 flex items-end gap-4">
+                <label className="block min-w-0 flex-1">
+                  <span className={cn(labelClass, "mt-4")}>Email</span>
                   <input
                     className={fieldClass}
                     type="email"
+                    placeholder="Google email"
                     value={email}
                     onChange={(event) => setEmail(event.target.value)}
                     required
                   />
                 </label>
-                <Button type="submit">Add member</Button>
+                <Button type="submit">Invite</Button>
               </form>
             ) : null}
 
-            <h4 className={`mt-12 ${labelClass}`}>Bots</h4>
-            <p className="mt-3 text-[13px] text-white/45">
+            <h3 className={subheadClass}>Bots</h3>
+            <p className="mb-2 text-[13px] font-light text-[#5c5c5c]">
               A registered bot is a name you can put on a task. It does not get a secret. One team token can post for all of them.
             </p>
-            <ul className="mt-6 space-y-4">
-              {bots.length === 0 ? <li className="text-[13px] text-white/35">No bots registered yet.</li> : null}
+            <ul>
+              {bots.length === 0 ? <li className="py-3.5 text-[13px] text-[#666]">No bots registered yet.</li> : null}
               {bots.map((bot) => (
-                <li key={bot.id} className="flex flex-wrap items-baseline justify-between gap-3 text-[15px]">
+                <li
+                  key={bot.id}
+                  className="flex flex-wrap items-baseline justify-between gap-3 border-b border-[#1c1c1c] py-3.5 text-[14px] font-light"
+                >
                   <span>
-                    {bot.name}
-                    <span className="mt-1 block text-[12px] text-white/40">{bot.agentId}</span>
+                    {bot.name} <span className="text-[12px] text-[#666]">{bot.agentId}</span>
                   </span>
                   {confirmUnregister === bot.id ? (
                     <span className="flex gap-4">
@@ -239,43 +321,46 @@ export function Settings() {
                 </li>
               ))}
             </ul>
-            <form onSubmit={(event) => void registerBot(event)} className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-end">
-              <label className={`block flex-1 ${labelClass}`}>
-                Name
+            <form onSubmit={(event) => void registerBot(event)} className="mt-2 flex flex-col gap-4 sm:flex-row sm:items-end">
+              <label className="block min-w-0 flex-1">
+                <span className={cn(labelClass, "mt-4")}>Name</span>
                 <input className={fieldClass} value={botName} onChange={(event) => setBotName(event.target.value)} required />
               </label>
-              <label className={`block flex-1 ${labelClass}`}>
-                Agent id
+              <label className="block min-w-0 flex-1">
+                <span className={cn(labelClass, "mt-4")}>Agent id</span>
                 <input className={fieldClass} value={agentId} onChange={(event) => setAgentId(event.target.value)} required />
               </label>
               <Button type="submit">Register</Button>
             </form>
 
-            <h4 className={`mt-12 ${labelClass}`}>Bot tokens</h4>
-            <p className="mt-3 text-[13px] text-white/45">
-              A token is a credential for this team, separate from a registered bot. Send it as <code>Authorization: Bearer …</code>.
-              The secret is shown once.
+            <h3 className={subheadClass}>Bot tokens</h3>
+            <p className="text-[13px] font-light text-[#5c5c5c]">
+              A token is a credential for this team, separate from a registered bot. Send it as{" "}
+              <code>Authorization: Bearer …</code>. The secret is shown once.
             </p>
             {secret ? (
-              <div className="mt-6 border-y border-white/15 py-4">
-                <p className="text-[13px] text-white/70">Shown once. Copy it now.</p>
-                <pre className="mt-3 overflow-x-auto text-[12px] text-white">{secret}</pre>
+              <div className="mt-4 border border-[#2a2a2a] border-l-white px-3.5 py-3.5">
+                <p className="text-[12px] text-[#c9a35a]">Copy it now. It will not be shown again.</p>
+                <pre className="mt-2 overflow-x-auto text-[12px] text-white">{secret}</pre>
                 <button
                   type="button"
-                  className="mt-3 text-[12px] uppercase tracking-[0.14em] text-white/50 hover:text-white"
+                  className="mt-3 text-[10px] font-normal uppercase tracking-[0.32em] text-[#8a8a8a] hover:text-white"
                   onClick={() => void navigator.clipboard.writeText(secret)}
                 >
                   Copy
                 </button>
               </div>
             ) : null}
-            <ul className="mt-6 space-y-4">
-              {tokens.length === 0 ? <li className="text-[13px] text-white/35">No tokens yet.</li> : null}
+            <ul className="mt-2">
+              {tokens.length === 0 ? <li className="py-3.5 text-[13px] text-[#666]">No tokens.</li> : null}
               {tokens.map((token) => (
-                <li key={token.id} className="flex flex-wrap items-baseline justify-between gap-3 text-[15px]">
+                <li
+                  key={token.id}
+                  className="flex flex-wrap items-baseline justify-between gap-3 border-b border-[#1c1c1c] py-3.5 text-[14px] font-light"
+                >
                   <span>
-                    {token.label}
-                    <span className="mt-1 block text-[12px] text-white/40">
+                    {token.label}{" "}
+                    <span className="text-[12px] text-[#666]">
                       {token.prefix}… {token.revokedAt ? "· revoked" : ""}
                     </span>
                   </span>
@@ -299,15 +384,21 @@ export function Settings() {
               ))}
             </ul>
             {isOwner ? (
-              <form onSubmit={(event) => void createToken(event)} className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-end">
-                <label className={`block flex-1 ${labelClass}`}>
-                  Label
-                  <input className={fieldClass} value={label} onChange={(event) => setLabel(event.target.value)} required />
+              <form onSubmit={(event) => void createToken(event)} className="mt-2 flex items-end gap-4">
+                <label className="block min-w-0 flex-1">
+                  <span className={cn(labelClass, "mt-4")}>Label</span>
+                  <input
+                    className={fieldClass}
+                    placeholder="Label, e.g. Grok Bot"
+                    value={label}
+                    onChange={(event) => setLabel(event.target.value)}
+                    required
+                  />
                 </label>
-                <Button type="submit">Create token</Button>
+                <Button type="submit">Mint</Button>
               </form>
             ) : (
-              <p className="mt-6 text-[13px] text-white/40">Ask an owner if you need a new token.</p>
+              <p className="mt-6 text-[13px] text-[#666]">Ask an owner if you need a new token.</p>
             )}
           </section>
         ) : null}

@@ -43,7 +43,11 @@ export function SignIn() {
     <div className="flex min-h-dvh flex-col bg-black text-white">
       <main className="flex flex-1 flex-col items-center justify-center gap-7 px-8 text-center">
         {config?.google ? (
-          <button type="button" className="text-[15px] hover:underline" onClick={() => (window.location.href = "/api/auth/google")}>
+          <button
+            type="button"
+            className="text-[15px] font-light tracking-wide hover:underline"
+            onClick={() => (window.location.href = "/api/auth/google")}
+          >
             Continue with Google
           </button>
         ) : config ? (
@@ -54,7 +58,7 @@ export function SignIn() {
               <button
                 key={devUser.email}
                 type="button"
-                className="text-[15px] hover:underline disabled:opacity-40"
+                className="text-[15px] font-light tracking-wide hover:underline disabled:opacity-40"
                 disabled={pending != null}
                 onClick={() => void signIn(devUser.email)}
               >

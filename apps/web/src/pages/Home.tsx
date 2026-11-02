@@ -3,16 +3,16 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
 import { useAuth } from "@/auth";
 import { CompleteDialog } from "@/components/CompleteDialog";
-import { GearIcon } from "@/components/Icons";
+import { GearIcon, iconButtonClass } from "@/components/Icons";
 import { TaskDialog } from "@/components/TaskDialog";
 import { TaskRow } from "@/components/TaskRow";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { actionLabel } from "@/lib/action";
 import { ApiError, api } from "@/lib/api";
-import { fieldClass } from "@/lib/field";
-
-const LIST_KEY = "hearth-list";
+import { cn } from "@/lib/cn";
+import { fieldClass, labelClass } from "@/lib/field";
+import { LIST_KEY } from "@/lib/list";
 
 export function Home() {
   const { user } = useAuth();
@@ -82,37 +82,33 @@ export function Home() {
   }
 
   return (
-    <div className="flex min-h-dvh flex-col bg-black text-white">
-      <header className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-4 px-8 pt-8">
-        <Link
-          to={current ? `/teams/${current.id}` : "/settings"}
-          aria-label="Settings"
-          className="text-white/70 hover:text-white"
-        >
-          <GearIcon />
-        </Link>
-        <button
-          type="button"
-          className="truncate text-center text-[15px] hover:underline disabled:opacity-40"
-          onClick={() => setPickingList(true)}
-          disabled={!current}
-        >
-          {current?.name ?? ""}
-        </button>
-        <button
-          type="button"
-          aria-label="New task"
-          onClick={openCreate}
-          className="text-[18px] leading-none text-white/70 hover:text-white"
-        >
-          +
-        </button>
+    <div className="flex h-dvh min-h-0 flex-col overflow-hidden bg-black text-white">
+      <header className="sticky top-0 z-20 shrink-0 bg-black px-5 pt-[env(safe-area-inset-top)]">
+        <div className="grid h-16 grid-cols-[44px_minmax(0,1fr)_44px] items-center">
+          <Link to={current ? `/teams/${current.id}` : "/settings"} aria-label="Settings" className={iconButtonClass}>
+            <GearIcon />
+          </Link>
+          <button
+            type="button"
+            className="w-full truncate pl-[0.42em] text-center text-[10px] font-normal uppercase tracking-[0.42em] text-[#e6e6e6] transition-opacity duration-150 hover:text-white active:opacity-40 disabled:opacity-40"
+            onClick={() => setPickingList(true)}
+            disabled={!current}
+          >
+            {current?.name ?? ""}
+          </button>
+          <button type="button" aria-label="New task" onClick={openCreate} className={iconButtonClass}>
+            <span aria-hidden className="block -translate-y-px text-[28px] font-extralight leading-none">
+              +
+            </span>
+          </button>
+        </div>
       </header>
 
-      <main className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-        <div className="my-auto flex w-full flex-col items-center px-8 py-16 text-center">
+      <main className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto w-full max-w-[560px] px-7 pb-16 pt-[7vh] sm:pt-[9vh]">
+          {loading ? <p className="text-[10px] font-normal uppercase tracking-[0.4em] text-[#4a4a4a]">Loading</p> : null}
           {!loading && error ? (
-            <p className="mb-8 max-w-sm text-[13px] text-white/50">
+            <p className="max-w-sm text-[13px] font-light text-white/60">
               {error}{" "}
               <button type="button" className="underline underline-offset-4" onClick={() => void reload()}>
                 try again
@@ -120,10 +116,10 @@ export function Home() {
             </p>
           ) : null}
           {!loading && !error && visible.length === 0 ? (
-            <p className="text-[15px] text-white/35">{emptyCopy(filter)}</p>
+            <p className="text-[10px] font-normal uppercase tracking-[0.4em] text-[#4a4a4a]">Nothing here</p>
           ) : null}
           {visible.length > 0 ? (
-            <ul className="flex w-full max-w-xl flex-col items-center gap-6 sm:gap-8">
+            <ul key={`${current?.id ?? "none"}-${filter}`} className="hearth-fade flex w-full flex-col">
               {visible.map((task) => (
                 <TaskRow key={task.id} task={task} onOpen={() => current && setEditing({ teamId: current.id, task })} />
               ))}
@@ -132,15 +128,12 @@ export function Home() {
         </div>
       </main>
 
-      <footer className="sticky bottom-0 z-10 bg-black px-4 pb-8 pt-6 sm:pb-10">
-        <nav
-          aria-label="Action"
-          className="flex flex-wrap items-center justify-center text-[10px] uppercase tracking-[0.14em] sm:text-[11px] sm:tracking-[0.18em]"
-        >
+      <footer className="sticky bottom-0 z-10 shrink-0 bg-black px-3 pb-[calc(26px+env(safe-area-inset-bottom))] pt-6 before:pointer-events-none before:absolute before:inset-x-0 before:-top-10 before:h-10 before:bg-gradient-to-b before:from-transparent before:to-black before:content-['']">
+        <nav aria-label="Action" className="relative flex flex-nowrap items-center justify-center">
           {actions.map((action, index) => (
             <span key={action} className="inline-flex items-center">
               {index > 0 ? (
-                <span className="px-2.5 text-white/25 sm:px-3" aria-hidden>
+                <span className="px-1.5 text-[#2a2a2a] sm:px-2.5" aria-hidden>
                   /
                 </span>
               ) : null}
@@ -148,13 +141,15 @@ export function Home() {
                 type="button"
                 aria-pressed={filter === action}
                 onClick={() => setFilter(action)}
-                className={
-                  filter === action
-                    ? "uppercase text-white underline decoration-white/80 underline-offset-4"
-                    : "uppercase text-white/35 hover:text-white"
-                }
+                className={cn(
+                  "relative px-1 py-3 text-[10px] font-normal uppercase tracking-[0.24em] transition-colors duration-200 sm:tracking-[0.38em]",
+                  filter === action ? "text-white" : "text-[#4a4a4a] hover:text-[#8a8a8a]",
+                )}
               >
                 {actionLabel[action]}
+                {filter === action ? (
+                  <span className="absolute bottom-1.5 left-1 h-px bg-white right-[calc(0.25rem+0.24em)] sm:right-[calc(0.25rem+0.38em)]" />
+                ) : null}
               </button>
             </span>
           ))}
@@ -218,22 +213,33 @@ function ListPicker({
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
       <DialogContent>
-        <DialogTitle className="sr-only">Lists</DialogTitle>
+        <DialogTitle>Lists</DialogTitle>
         <DialogDescription className="sr-only">Choose the list shown on the main screen.</DialogDescription>
-        <ul className="flex flex-col items-center gap-8 pt-8 text-center">
-          {teams.map((team) => (
-            <li key={team.id}>
-              <button
-                type="button"
-                onClick={() => onChoose(team.id)}
-                className={team.id === currentId ? "text-[15px] text-white" : "text-[15px] text-white/40 hover:text-white"}
-              >
-                {team.name}
-              </button>
-            </li>
-          ))}
+        <ul className="flex flex-col">
+          {teams.map((team) => {
+            const on = team.id === currentId;
+            return (
+              <li key={team.id}>
+                <button
+                  type="button"
+                  onClick={() => onChoose(team.id)}
+                  className={cn(
+                    "py-3.5 text-left text-[24px] font-light transition-colors duration-200",
+                    on ? "text-white" : "text-[#555] hover:text-white",
+                  )}
+                >
+                  {on ? <span className="mr-3.5 inline-block h-px w-[18px] bg-white align-middle" /> : null}
+                  {team.name}
+                </button>
+              </li>
+            );
+          })}
         </ul>
-        <button type="button" className="mt-16 block w-full text-center text-[13px] text-white/50 hover:text-white" onClick={onCreate}>
+        <button
+          type="button"
+          className="mt-16 text-[10px] font-normal uppercase tracking-[0.32em] text-[#8a8a8a] transition-colors duration-150 hover:text-white"
+          onClick={onCreate}
+        >
           New household
         </button>
       </DialogContent>
@@ -276,17 +282,17 @@ function HouseholdDialog({
       <DialogContent>
         <form onSubmit={(event) => void onSubmit(event)}>
           <DialogTitle>Household</DialogTitle>
-          <DialogDescription>You become the owner. Invite people from the list after they have signed in once.</DialogDescription>
-          <label className="mt-6 block text-[11px] uppercase tracking-[0.16em] text-white/45">
+          <DialogDescription>You become the owner. Invite people from settings after they have signed in once.</DialogDescription>
+          <label className={labelClass}>
             Name
             <input className={fieldClass} value={name} onChange={(event) => setName(event.target.value)} required />
           </label>
-          {error ? <p className="mt-4 text-[13px] text-white/70">{error}</p> : null}
-          <div className="mt-8 flex justify-end gap-5">
+          {error ? <p className="mt-4 text-[13px] text-[#c9a35a]">{error}</p> : null}
+          <div className="mt-16 flex items-center justify-end gap-7">
             <Button type="button" variant="ghost" onClick={onClose}>
               Cancel
             </Button>
-            <Button type="submit" disabled={saving}>
+            <Button type="submit" variant="solid" disabled={saving}>
               {saving ? "Creating…" : "Create"}
             </Button>
           </div>
@@ -301,11 +307,4 @@ function compareTasks(a: Task, b: Task) {
   const bd = b.dueAt ? new Date(b.dueAt).getTime() : Number.POSITIVE_INFINITY;
   if (ad !== bd) return ad - bd;
   return a.title.localeCompare(b.title);
-}
-
-function emptyCopy(action: Action) {
-  if (action === "do_now") return "Nothing to do now.";
-  if (action === "delegate") return "Nothing to delegate.";
-  if (action === "schedule") return "Nothing to schedule.";
-  return "Nothing for later.";
 }

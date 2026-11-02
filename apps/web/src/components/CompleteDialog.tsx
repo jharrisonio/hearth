@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { ApiError, api } from "@/lib/api";
-import { fieldClass } from "@/lib/field";
+import { fieldClass, labelClass } from "@/lib/field";
 
 export function CompleteDialog({
   task,
@@ -16,7 +16,7 @@ export function CompleteDialog({
 }) {
   return (
     <Dialog open={task != null} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent>
+      <DialogContent variant="modal">
         {task ? <CompleteForm key={task.id} task={task} onClose={onClose} onSaved={onSaved} /> : null}
       </DialogContent>
     </Dialog>
@@ -49,18 +49,18 @@ function CompleteForm({ task, onClose, onSaved }: { task: Task; onClose: () => v
 
   return (
     <form onSubmit={(event) => void onSubmit(event)}>
-      <DialogTitle>Done</DialogTitle>
-      <DialogDescription>{task.title}</DialogDescription>
-      <label className="mt-6 block text-[11px] uppercase tracking-[0.16em] text-white/45">
+      <DialogTitle className="mb-3">Done</DialogTitle>
+      <DialogDescription className="text-[15px] text-[#d6d6d6]">{task.title}</DialogDescription>
+      <label className={labelClass}>
         Outcome
         <textarea className={fieldClass} rows={3} value={outcome} onChange={(event) => setOutcome(event.target.value)} autoFocus required />
       </label>
-      {error ? <p className="mt-4 text-[13px] text-white/70">{error}</p> : null}
-      <div className="mt-8 flex justify-end gap-5">
+      {error ? <p className="mt-4 text-[13px] text-[#c9a35a]">{error}</p> : null}
+      <div className="mt-12 flex items-center justify-end gap-7">
         <Button type="button" variant="ghost" onClick={onClose}>
           Cancel
         </Button>
-        <Button type="submit" disabled={saving}>
+        <Button type="submit" variant="solid" disabled={saving}>
           {saving ? "Saving…" : "Mark done"}
         </Button>
       </div>

@@ -1,10 +1,11 @@
-import type { Action, BotSummary, BotTokenSummary, Member, Task } from "@hearth/shared";
+import { actions, suggestAction, type Action, type BotSummary, type BotTokenSummary, type Member, type Task } from "@hearth/shared";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { actionLabel, axesFor } from "@/lib/action";
 import { ApiError, api } from "@/lib/api";
-import { fieldClass } from "@/lib/field";
+import { cn } from "@/lib/cn";
+import { fieldClass, hintClass, labelClass } from "@/lib/field";
 import { fromLocalInput, ownerKey, parseOwnerKey, toLocalInput } from "@/lib/format";
 
 export function TaskDialog({
@@ -82,13 +83,14 @@ function TaskForm({
   const activeTokens = tokens.filter((token) => token.revokedAt == null || token.id === task?.owner.id);
   const knownBots = new Set([...bots.map((bot) => bot.id), ...activeTokens.map((token) => token.id)]);
   const unknownBot = task?.owner.type === "bot" && !knownBots.has(task.owner.id) ? task.owner.id : null;
+  const suggested = suggestAction(important, urgent);
 
   useEffect(() => {
     let cancelled = false;
     void Promise.all([api.team(teamId), api.bots(teamId), api.tokens(teamId)])
-      .then(([detail, botList, tokenList]) => {
+      .then(([detailResponse, botList, tokenList]) => {
         if (cancelled) return;
-        setMembers(detail.members);
+        setMembers(detailResponse.members);
         setBots(botList.bots);
         setTokens(tokenList.tokens);
       })
@@ -100,6 +102,15 @@ function TaskForm({
       cancelled = true;
     };
   }, [teamId]);
+
+  function selectAction(next: Action) {
+    setAction(next);
+    if (next === "delegate" && !dueAt) {
+      const when = new Date();
+      when.setDate(when.getDate() + 3);
+      setDueAt(toLocalInput(when.toISOString()));
+    }
+  }
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -142,102 +153,129 @@ function TaskForm({
     }
   }
 
-  const label = "text-[11px] uppercase tracking-[0.16em] text-white/45";
-
   return (
     <form onSubmit={(event) => void onSubmit(event)}>
-      <DialogTitle>{task ? "Edit" : "New"}</DialogTitle>
-      <DialogDescription className="sr-only">
-        Important and urgent choose do now, delegate, schedule, or later.
-      </DialogDescription>
-      <label className="mt-6 block text-[11px] uppercase tracking-[0.16em] text-white/45">
+      <DialogTitle>{task ? "Task" : "New task"}</DialogTitle>
+      <DialogDescription className="sr-only">Important and urgent choose do now, delegate, schedule, or later.</DialogDescription>
+      <label className={labelClass}>
         Title
         <input className={fieldClass} value={title} onChange={(event) => setTitle(event.target.value)} autoFocus required />
       </label>
-      <div className="mt-6 flex gap-6 text-[13px]">
-        <label className="inline-flex items-center gap-2">
-          <input type="checkbox" className="accent-white" checked={important} onChange={(event) => setImportant(event.target.checked)} />
+      <p className={labelClass}>Action</p>
+      <div className="flex flex-wrap gap-[22px]" role="group" aria-label="Action">
+        {actions.map((item) => {
+          const on = item === action;
+          return (
+            <button
+              key={item}
+              type="button"
+              aria-pressed={on}
+              onClick={() => selectAction(item)}
+              className={cn(
+                "relative py-2.5 text-[10px] font-normal uppercase tracking-[0.32em] transition-colors duration-200",
+                on ? "text-white" : "text-[#4a4a4a] hover:text-[#8a8a8a]",
+              )}
+            >
+              {actionLabel[item]}
+              {on ? <span className="absolute bottom-1 left-0 right-[0.32em] h-px bg-white" /> : null}
+            </button>
+          );
+        })}
+      </div>
+      <p className={hintClass}>
+        {suggested === action ? (
+          "Matches the matrix."
+        ) : (
+          <>
+            Matrix suggests <b className="font-normal text-[#bbb]">{actionLabel[suggested]}</b> — override kept.
+          </>
+        )}
+      </p>
+      <div className="mt-[30px] grid grid-cols-2 gap-4">
+        <label className="flex items-center gap-2 text-[14px] font-light tracking-normal text-[#ccc] normal-case">
+          <input type="checkbox" checked={important} onChange={(event) => setImportant(event.target.checked)} />
           Important
         </label>
-        <label className="inline-flex items-center gap-2">
-          <input type="checkbox" className="accent-white" checked={urgent} onChange={(event) => setUrgent(event.target.checked)} />
+        <label className="flex items-center gap-2 text-[14px] font-light tracking-normal text-[#ccc] normal-case">
+          <input type="checkbox" checked={urgent} onChange={(event) => setUrgent(event.target.checked)} />
           Urgent
         </label>
       </div>
-      <label className={`mt-6 block ${label}`}>
-        Action
-        <select className={fieldClass} value={action} onChange={(event) => setAction(event.target.value as Action)}>
-          <option value="do_now">Do now</option>
-          <option value="delegate">Delegate</option>
-          <option value="schedule">Schedule</option>
-          <option value="later">Later</option>
-        </select>
-      </label>
-      <p className="mt-3 text-[11px] uppercase tracking-[0.18em] text-white/70">{actionLabel[action]}</p>
       {action === "delegate" ? (
-        <label className={`mt-6 block ${label}`}>
-          Waiting on
-          <input className={fieldClass} value={waitingOn} onChange={(event) => setWaitingOn(event.target.value)} required />
-        </label>
+        <>
+          <label className={labelClass}>
+            Waiting on
+            <input
+              className={fieldClass}
+              value={waitingOn}
+              placeholder="e.g. Naomi, plumber, ATO"
+              onChange={(event) => setWaitingOn(event.target.value)}
+              required
+            />
+          </label>
+          <label className={labelClass}>
+            Follow up
+            <input className={fieldClass} type="datetime-local" value={dueAt} onChange={(event) => setDueAt(event.target.value)} />
+          </label>
+          <p className={hintClass}>Defaults to +3 days when delegated.</p>
+        </>
       ) : null}
       {action === "schedule" ? (
-        <label className={`mt-6 block ${label}`}>
-          Calendar event id
-          <input className={fieldClass} value={calendarEventId} onChange={(event) => setCalendarEventId(event.target.value)} />
-        </label>
+        <>
+          <label className={labelClass}>
+            When
+            <input className={fieldClass} type="datetime-local" value={dueAt} onChange={(event) => setDueAt(event.target.value)} />
+          </label>
+          <label className={labelClass}>
+            Calendar event
+            <input className={fieldClass} value={calendarEventId} onChange={(event) => setCalendarEventId(event.target.value)} />
+          </label>
+          {task?.needsCalendar ? <p className={hintClass}>Needs a calendar.</p> : null}
+        </>
       ) : null}
-      <label className={`mt-6 block ${label}`}>
-        {action === "delegate" ? "Follow-up" : "Due"}
-        <input className={fieldClass} type="datetime-local" value={dueAt} onChange={(event) => setDueAt(event.target.value)} />
-      </label>
-      <label className={`mt-6 block ${label}`}>
-        Owner
-        <select className={fieldClass} value={owner} onChange={(event) => setOwner(event.target.value)}>
-          {members.map((member) => (
-            <option key={member.userId} value={ownerKey("user", member.userId)}>
-              {member.name}
-            </option>
-          ))}
-          {bots.map((bot) => (
-            <option key={bot.id} value={ownerKey("bot", bot.id)}>
-              {bot.name}
-            </option>
-          ))}
-          {activeTokens.map((token) => (
-            <option key={token.id} value={ownerKey("bot", token.id)}>
-              {token.label}
-              {token.revokedAt ? " (revoked)" : ""}
-            </option>
-          ))}
-          {unknownBot ? <option value={ownerKey("bot", unknownBot)}>Unregistered bot</option> : null}
-        </select>
-      </label>
-      <label className={`mt-6 block ${label}`}>
-        Project
-        <input className={fieldClass} value={project} onChange={(event) => setProject(event.target.value)} />
-      </label>
-      <label className={`mt-6 block ${label}`}>
+      <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-2">
+        <label className={labelClass}>
+          Owner
+          <select className={fieldClass} value={owner} onChange={(event) => setOwner(event.target.value)}>
+            {members.map((member) => (
+              <option key={member.userId} value={ownerKey("user", member.userId)}>
+                {member.name}
+              </option>
+            ))}
+            {bots.map((bot) => (
+              <option key={bot.id} value={ownerKey("bot", bot.id)}>
+                {bot.name}
+              </option>
+            ))}
+            {activeTokens.map((token) => (
+              <option key={token.id} value={ownerKey("bot", token.id)}>
+                {token.label}
+                {token.revokedAt ? " (revoked)" : ""}
+              </option>
+            ))}
+            {unknownBot ? <option value={ownerKey("bot", unknownBot)}>Unregistered bot</option> : null}
+          </select>
+        </label>
+        <label className={labelClass}>
+          Project
+          <input className={fieldClass} value={project} placeholder="e.g. Jean St" onChange={(event) => setProject(event.target.value)} />
+        </label>
+      </div>
+      <label className={labelClass}>
         Detail
-        <textarea className={fieldClass} rows={2} value={detail} onChange={(event) => setDetail(event.target.value)} />
+        <textarea className={cn(fieldClass, "resize-y")} rows={3} value={detail} onChange={(event) => setDetail(event.target.value)} />
       </label>
       {task?.status === "done" && task.outcome ? <p className="mt-6 text-[13px] text-white/60">Outcome: {task.outcome}</p> : null}
-      {error ? <p className="mt-4 text-[13px] text-white/70">{error}</p> : null}
-      <div className="sticky bottom-0 mt-8 flex items-center justify-between gap-4 bg-black py-4">
+      {error ? <p className="mt-4 text-[13px] text-[#c9a35a]">{error}</p> : null}
+      <div className="mt-16 flex items-center justify-end gap-7">
+        <Button type="submit" variant={task ? "ghost" : "solid"} disabled={saving}>
+          {saving ? "Saving…" : task ? "Save" : "Add"}
+        </Button>
         {task && task.status === "open" ? (
-          <button type="button" className="text-[13px] text-white/50 hover:text-white" onClick={() => onComplete(task)}>
-            Mark done
-          </button>
-        ) : (
-          <span />
-        )}
-        <div className="flex gap-5">
-          <Button type="button" variant="ghost" onClick={onClose}>
-            Cancel
+          <Button type="button" variant="solid" onClick={() => onComplete(task)}>
+            Complete
           </Button>
-          <Button type="submit" disabled={saving}>
-            {saving ? "Saving…" : task ? "Save" : "Add"}
-          </Button>
-        </div>
+        ) : null}
       </div>
     </form>
   );
