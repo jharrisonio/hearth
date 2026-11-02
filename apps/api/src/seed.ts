@@ -1,3 +1,4 @@
+import type { Action } from "@hearth/shared";
 import { and, count, eq } from "drizzle-orm";
 import { ensurePersonalTeam, findUserByEmail } from "./accounts.js";
 import { db } from "./db.js";
@@ -69,7 +70,7 @@ async function seedTasks(
       project: "Kitchen",
       important: true,
       urgent: true,
-      lane: "next",
+      action: "do_now",
       dueAt: daysFromNow(1),
     }),
     task(householdId, naomiId, {
@@ -77,7 +78,7 @@ async function seedTasks(
       project: "House",
       important: true,
       urgent: false,
-      lane: "waiting",
+      action: "delegate",
       waitingOn: "a plumber to ring back",
     }),
     task(householdId, jamesId, {
@@ -85,7 +86,7 @@ async function seedTasks(
       project: "Shed",
       important: false,
       urgent: false,
-      lane: "someday",
+      action: "later",
     }),
   ]);
   await insertIfEmpty(jamesTeamId, [
@@ -94,7 +95,7 @@ async function seedTasks(
       project: "Admin",
       important: true,
       urgent: false,
-      lane: "next",
+      action: "do_now",
       dueAt: daysFromNow(3),
     }),
   ]);
@@ -104,7 +105,7 @@ async function seedTasks(
       project: "Errands",
       important: false,
       urgent: true,
-      lane: "next",
+      action: "do_now",
       dueAt: daysFromNow(2),
     }),
   ]);
@@ -118,20 +119,24 @@ function task(
     project: string;
     important: boolean;
     urgent: boolean;
-    lane: "next" | "waiting" | "someday";
+    action: Action;
     waitingOn?: string;
     dueAt?: Date;
+    calendarEventId?: string | null;
   },
 ) {
+  const calendarEventId = fields.calendarEventId ?? null;
   return {
     teamId,
     title: fields.title,
     project: fields.project,
     important: fields.important,
     urgent: fields.urgent,
-    lane: fields.lane,
+    action: fields.action,
     waitingOn: fields.waitingOn ?? null,
-    dueAt: fields.dueAt ?? null,
+    calendarEventId,
+    needsCalendar: fields.action === "schedule" && !calendarEventId,
+    dueAt: fields.dueAt !== undefined ? fields.dueAt : fields.action === "delegate" ? daysFromNow(3) : null,
     ownerType: "user" as const,
     ownerId: userId,
     createdByType: "user" as const,
