@@ -12,12 +12,8 @@ import {
   doImmediatelyQuerySchema,
   httpOperations,
   IDEMPOTENCY_KEY_HEADER,
-  listBotsToolSchema,
   listNamedToolSchema,
   listTasksQuerySchema,
-  registerBotSchema,
-  registerBotToolSchema,
-  unregisterBotToolSchema,
   updateProjectSchema,
   updateProjectToolSchema,
   updateTaskSchema,
@@ -29,6 +25,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { Context } from "hono";
 import { actorFromBearer } from "./actor.js";
+import { HttpError } from "./errors.js";
+import { bearerChallenge } from "./oauth.js";
 
 type FetchApp = {
   request: (input: string, init?: RequestInit) => Response | Promise<Response>;
@@ -46,13 +44,20 @@ const SERVER_VERSION = "0.1.0";
  */
 export async function handleMcp(c: Context, app: FetchApp): Promise<Response> {
   const authorization = c.req.header("authorization");
-  await actorFromBearer(authorization);
+  try {
+    await actorFromBearer(authorization);
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 401) {
+      return bearerChallenge(err.message, Boolean(authorization));
+    }
+    throw err;
+  }
 
   const server = new McpServer(
     { name: "hearth", version: SERVER_VERSION },
     {
       instructions:
-        "Hearth tasks for the team this bot token belongs to. Pass idempotencyKey on create_task when a retry must return the original task instead of a duplicate. The key lasts 24 hours for this bot. A project is a multi-step outcome; an area is a life or work domain such as House or Finance. Link them with projectId and areaId. On a project, do_now, delegate, and schedule are active next actions and several may run at once. Future or dependent steps are separate tasks with action later. Project notes hold the plan, not the step list. Later steps stay out of list_do_immediately. Register Fin, Rally, and other agents with register_bot (agent id and display name, no extra token) and set owner to that bot id. waitingOn is required on a delegate task unless the owner is a bot. list_do_immediately for this token is open delegate tasks this token owns, plus schedule tasks this token owns that still need a calendar or are due for check-in (dueAt in the past, calendar attached or not). calendarEventId is an event id or an http(s) calendar URL and clears needsCalendar. Hearth does not create the Google event. A linked schedule needs dueAt, the event time. Check-in is an open schedule with dueAt in the past: complete_task, cancel_task, or update dueAt and calendarEventId. list_tasks filters needsCalendar. Another registered bot's delegate work is list_tasks with action=delegate, status=open, and owner=bot:<id>. That bot's schedule check-ins use action=schedule, status=open, owner=bot:<id>, and dueBefore now. Set source to { type: \"email\" | \"url\", href, label?, externalId? } to link the originating email or page. For Gmail, href is https://mail.google.com/mail/u/0/#all/<threadId> and externalId is the message or thread id. Pass source: null on update_task to clear it. cancel_task keeps the row for audit. delete_task removes a mistake or duplicate. Live edits are not pushed over MCP. Subscribe with GET /teams/:teamId/events (text/event-stream, same Bearer token). Read the hearth://task-events resource for the exact URL and the event shape.",
+        "Hearth tasks for the teams this token may manage. Pass idempotencyKey on create_task when a retry must return the original task instead of a duplicate. The key lasts 24 hours for this bot. A project is a multi-step outcome; an area is a life or work domain such as House or Finance. Link them with projectId and areaId. On a project, do_now, delegate, and schedule are active next actions and several may run at once. Future or dependent steps are separate tasks with action later. Project notes hold the plan, not the step list. Later steps stay out of list_do_immediately. Bot owners are named when Hearth is connected, or later in Settings. Use a registered bot id as owner. Omit owner and this token becomes the owner. Reconnecting is not required to add, rename, or retire an owner. waitingOn is required on a delegate task unless the owner is a bot. list_do_immediately for this token is open delegate tasks this token owns, plus schedule tasks this token owns that still need a calendar or are due for check-in (dueAt in the past, calendar attached or not). calendarEventId is an event id or an http(s) calendar URL and clears needsCalendar. Hearth does not create the Google event. A linked schedule needs dueAt, the event time. Check-in is an open schedule with dueAt in the past: complete_task, cancel_task, or update dueAt and calendarEventId. list_tasks filters needsCalendar. Another registered bot's delegate work is list_tasks with action=delegate, status=open, and owner=bot:<id>. That bot's schedule check-ins use action=schedule, status=open, owner=bot:<id>, and dueBefore now. Set source to { type: \"email\" | \"url\", href, label?, externalId? } to link the originating email or page. For Gmail, href is https://mail.google.com/mail/u/0/#all/<threadId> and externalId is the message or thread id. Pass source: null on update_task to clear it. cancel_task keeps the row for audit. delete_task removes a mistake or duplicate. Live edits are not pushed over MCP. Subscribe with GET /teams/:teamId/events (text/event-stream, same Bearer token). Read the hearth://task-events resource for the exact URL and the event shape.",
     },
   );
   registerTaskTools(server, app, authorization ?? "");
@@ -115,7 +120,7 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "create_task",
     {
       description:
-        "Create one task (POST /tasks), one project step per call. Active next actions are action do_now, delegate, or schedule — several may share a project. Future or dependent steps use action later unless that step is explicitly active. Omit action to take the important × urgent suggestion (neither suggests later). idempotencyKey is sent as the Idempotency-Key header. The same key and body, for this bot, returns the original task for 24 hours. A different body with that key is rejected. owner, when type bot, must be a bot registered on the team (or an existing token id). waitingOn is required when action is delegate and the owner is not a bot. A bot owner may omit waitingOn. Omit owner and this token becomes the owner. projectId and areaId link a project or an area on the same team. source, when set, is { type: \"email\" | \"url\", href, label?, externalId? }. href is an http(s) URL. For Gmail, type is email and href is the mail.google.com deep link. calendarEventId is an event id or an http(s) calendar URL. On a schedule task it clears needsCalendar, and dueAt (the event time) is required with it.",
+        "Create one task (POST /tasks), one project step per call. Active next actions are action do_now, delegate, or schedule — several may share a project. Future or dependent steps use action later unless that step is explicitly active. Omit action to take the important × urgent suggestion (neither suggests later). idempotencyKey is sent as the Idempotency-Key header. The same key and body, for this bot, returns the original task for 24 hours. A different body with that key is rejected. owner, when type bot, must be a bot registered on the team, this token, or the connector grant. waitingOn is required when action is delegate and the owner is not a bot. A bot owner may omit waitingOn. Omit owner and this token becomes the owner. projectId and areaId link a project or an area on the same team. source, when set, is { type: \"email\" | \"url\", href, label?, externalId? }. href is an http(s) URL. For Gmail, type is email and href is the mail.google.com deep link. calendarEventId is an event id or an http(s) calendar URL. On a schedule task it clears needsCalendar, and dueAt (the event time) is required with it.",
       inputSchema: createTaskToolSchema,
     },
     async ({ idempotencyKey, ...body }) => {
@@ -134,7 +139,7 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "update_task",
     {
       description:
-        "Update a task (PATCH /tasks/:id). Set action to move a project step between an active front (do_now, delegate, schedule) and later. Several active fronts on one project are allowed. Status cannot be changed here. Complete the task with complete_task, or cancel it with cancel_task. owner, when type bot, must be a bot registered on the team (or an existing token id). waitingOn is required when the task is delegate and the owner is not a bot. A bot owner may set waitingOn to null. Pass projectId or areaId as a uuid to set that link, or null to clear it. Omit either field to leave it unchanged. source replaces the link; null clears it. Omit source to leave the link unchanged. calendarEventId sets the event id or calendar URL, or null to clear it. A schedule task with a calendar event needs dueAt.",
+        "Update a task (PATCH /tasks/:id). Set action to move a project step between an active front (do_now, delegate, schedule) and later. Several active fronts on one project are allowed. Status cannot be changed here. Complete the task with complete_task, or cancel it with cancel_task. owner, when type bot, must be a bot registered on the team, this token, or the connector grant. waitingOn is required when the task is delegate and the owner is not a bot. A bot owner may set waitingOn to null. Pass projectId or areaId as a uuid to set that link, or null to clear it. Omit either field to leave it unchanged. source replaces the link; null clears it. Omit source to leave the link unchanged. calendarEventId sets the event id or calendar URL, or null to clear it. A schedule task with a calendar event needs dueAt.",
       inputSchema: updateTaskToolSchema,
     },
     async ({ id, ...patch }) => {
@@ -292,53 +297,6 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
       const resolved = await resolveTeamId(app, authorization, query.teamId);
       if ("failure" in resolved) return asTool(resolved.failure);
       return asTool(await callApi(app, authorization, `/teams/${resolved.teamId}/areas${namedQuery(query)}`));
-    },
-  );
-
-  server.registerTool(
-    "register_bot",
-    {
-      description:
-        "Register a bot on a team (POST /teams/:id/bots). Pass the Grok Bot agent id and a display name. No secret is minted. The same agent id returns the same bot; a new name renames it. Omit teamId when this token belongs to one team. Use the returned id as owner.",
-      inputSchema: registerBotToolSchema,
-    },
-    async ({ teamId, agentId, name }) => {
-      const resolved = await resolveTeamId(app, authorization, teamId);
-      if ("failure" in resolved) return asTool(resolved.failure);
-      const parsed = registerBotSchema.parse({ agentId, name });
-      return asTool(await callApi(app, authorization, `/teams/${resolved.teamId}/bots`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(parsed),
-      }));
-    },
-  );
-
-  server.registerTool(
-    "list_bots",
-    {
-      description:
-        "List bots registered on a team (GET /teams/:id/bots). These are owners, not tokens. Omit teamId when this token belongs to one team.",
-      inputSchema: listBotsToolSchema,
-    },
-    async ({ teamId }) => {
-      const resolved = await resolveTeamId(app, authorization, teamId);
-      if ("failure" in resolved) return asTool(resolved.failure);
-      return asTool(await callApi(app, authorization, `/teams/${resolved.teamId}/bots`));
-    },
-  );
-
-  server.registerTool(
-    "unregister_bot",
-    {
-      description:
-        "Remove a registered bot (DELETE /teams/:id/bots/:id). Existing tasks keep the old owner id. Omit teamId when this token belongs to one team.",
-      inputSchema: unregisterBotToolSchema,
-    },
-    async ({ id, teamId }) => {
-      const resolved = await resolveTeamId(app, authorization, teamId);
-      if ("failure" in resolved) return asTool(resolved.failure);
-      return asTool(await callApi(app, authorization, `/teams/${resolved.teamId}/bots/${id}`, { method: "DELETE" }));
     },
   );
 }

@@ -51,12 +51,13 @@ That script signs in as both seeded people, checks Naomi cannot read James's per
 | Variable | Purpose |
 | --- | --- |
 | `DATABASE_URL` | Postgres connection string |
-| `SESSION_SECRET` | Signs the session cookie. At least 16 characters |
 | `DEV_AUTH` | `1` enables `POST /auth/dev` for seeded users |
 | `SEED` | `1` creates James, Naomi, the Harrison household, and a few starter tasks if those lists are empty |
 | `GOOGLE_CLIENT_ID` | Google OAuth client id. Optional |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth secret. Optional |
-| `PUBLIC_URL` | Browser origin of the web app, used for the OAuth redirect. Default `http://127.0.0.1:43123`. On Railway this can be omitted when `WEB_PUBLIC_DOMAIN` is set |
+| `PUBLIC_URL` | Browser origin of the web app. Google sign-in and the MCP consent page live here. Default `http://127.0.0.1:43123`. On Railway this can be omitted when `WEB_PUBLIC_DOMAIN` is set |
+| `OAUTH_ISSUER` | Public origin of the API, with no trailing slash. MCP discovery, `/authorize`, `/token`, and `/register` use it. Default `http://127.0.0.1:$PORT`. On Railway, omit it and the API uses `https://` plus `RAILWAY_PUBLIC_DOMAIN`. This is not a second login to Grok Bot. Grok connects to Hearth |
+| `SESSION_SECRET` | Signs the session cookie. At least 16 characters. OAuth tokens are stored as hashes. There is no separate OAuth signing secret |
 | `WEB_PUBLIC_DOMAIN` | Public host of the web service, without a scheme. The API turns it into `https://…` when `PUBLIC_URL` is unset |
 | `PORT` | Port the process listens on. The API defaults to `43124` locally and `3001` inside Compose. Railway sets this |
 | `CORS_ORIGINS` | Optional comma-separated browser origins allowed to call the API directly. Leave empty when the web app proxies `/api` (Compose and the Railway web service). No wildcard |
@@ -84,6 +85,8 @@ railway config plan
 railway config apply
 ```
 
+The API service needs a public HTTPS domain so a connector can reach `POST /mcp`. `OAUTH_ISSUER` can stay unset: the API uses `https://` plus Railway's public domain for that service. Give the API a public domain before connecting Grok Bot. The consent page stays on the web origin (`PUBLIC_URL`).
+
 Then connect `github.com/jharrisonio/hearth` to the `api` and `web` services and deploy `main`. Set these on the API in the Railway dashboard before that first deploy:
 
 | Variable | Value |
@@ -101,7 +104,9 @@ Google’s redirect URI is `https://<web-domain>/api/auth/google/callback`.
 
 ## Auth
 
-Humans send the `hearth_session` cookie (set by dev sign-in or Google). Bots send `Authorization: Bearer hth_…`. A token is scoped to one team. Owners create and revoke tokens in team settings. The secret is returned once and only its hash is stored.
+Humans send the `hearth_session` cookie (set by dev sign-in or Google). Bots send `Authorization: Bearer hth_…` or an OAuth access token `hoa_…`. An `hth_…` token is scoped to one team. An OAuth token is scoped to the lists chosen at consent, and that set can change later in Settings without a new install. Owners create and revoke `hth_…` tokens in team settings. The secret is returned once and only its hash is stored.
+
+MCP install is OAuth 2.1 on the API origin. The connector is sent to the Hearth consent page, the signed-in person picks lists they own, and Hearth redirects back with an authorisation code. There is no OAuth from Hearth back to Grok Bot. Existing `hth_…` tokens keep working for REST and MCP.
 
 On first sign-in, the user gets a personal team. Households are created explicitly. An owner adds a member by email after that person has signed in at least once. Personal teams have no extra members.
 
@@ -196,7 +201,9 @@ A human gets the morning queue: open `do_now` tasks, `schedule` tasks that still
 
 A bot token gets its own open work: `delegate` tasks owned by that token, at any follow-up, plus `schedule` tasks that token owns which still need a calendar or are a check-in. `do_now` stays human work and is not included. Another registered bot (Fin, Rally) is not the token. List that bot's open delegate work with `GET /tasks?action=delegate&status=open&owner=bot:<id>`. List that bot's schedule check-ins with `action=schedule`, `status=open`, `owner=bot:<id>`, and `dueBefore` now. List the ones that still need a calendar with `needsCalendar=true` instead of `dueBefore`.
 
-Other routes humans use from the app: `GET /auth/config`, `POST /auth/dev`, `GET /auth/google`, `GET /auth/me`, `POST /auth/logout`, `GET /teams`, `POST /teams`, `GET /teams/:id`, `GET /teams/:id/events`, `POST /teams/:id/members`, `GET|POST /teams/:id/bots`, `DELETE /teams/:id/bots/:botId`, `GET|POST /teams/:id/projects`, `PATCH /teams/:id/projects/:projectId`, `GET|POST /teams/:id/areas`, `PATCH /teams/:id/areas/:areaId`, `GET|POST /teams/:id/tokens`, `DELETE /teams/:id/tokens/:tokenId`.
+Other routes humans use from the app: `GET /auth/config`, `POST /auth/dev`, `GET /auth/google`, `GET /auth/me`, `POST /auth/logout`, `GET /teams`, `POST /teams`, `GET /teams/:id`, `GET /teams/:id/events`, `POST /teams/:id/members`, `GET|POST /teams/:id/bots`, `PATCH /teams/:id/bots/:botId`, `DELETE /teams/:id/bots/:botId`, `GET /teams/:id/connectors`, `DELETE /teams/:id/connectors/:grantId`, `GET|POST /teams/:id/projects`, `PATCH /teams/:id/projects/:projectId`, `GET|POST /teams/:id/areas`, `PATCH /teams/:id/areas/:areaId`, `GET|POST /teams/:id/tokens`, `DELETE /teams/:id/tokens/:tokenId`.
+
+MCP OAuth, on the API origin: `GET /.well-known/oauth-protected-resource`, `GET /.well-known/oauth-protected-resource/mcp`, `GET /.well-known/oauth-authorization-server`, `GET /.well-known/openid-configuration`, `POST /register`, `GET /authorize`, `POST /token`. The consent page calls `GET /oauth/request`, `POST /oauth/consent`, and `POST /oauth/consent/deny`. A missing or invalid bearer on `POST /mcp` is 401 with `WWW-Authenticate` pointing at the protected-resource metadata.
 
 `POST` for an area takes `{ "name": "…" }`. `POST` for a project takes `{ "name": "…", "notes": "…" }`. `notes` is optional, at most 5000 characters, and null when omitted. The same name on that team returns the existing row (200) and restores it if it was archived. Sending `notes` on that call replaces the stored notes; omit `notes` to leave them. A new row is 201. `PATCH` for an area takes `name` and/or `archived`. `PATCH` for a project also takes `notes` (`null` clears it), `areaId` (a uuid on that team, or `null` to clear), and `archived`. Setting `archived` to true completes the project. It is rejected with `409` `project_open_tasks` while any task on that project is still `open`. Complete or cancel those tasks first. The row is not deleted. `GET` omits archived rows unless `includeArchived=true`. A project in the list looks like `{ "id", "teamId", "name", "notes", "area", "archivedAt", "createdAt", "updatedAt" }`. An area has the same fields without `notes` and `area`. Archived links stay on tasks until cleared.
 
@@ -264,9 +271,9 @@ curl -sS -D - -b /tmp/hearth.cj -H 'content-type: application/json' \
 
 ## Bot owners
 
-A registered bot is an identity, not a credential. `POST /teams/:id/bots` with `{ "agentId": "…", "name": "Fin" }` creates a row and returns its id. No `hth_…` secret is minted. That id is the task owner: `{ "type": "bot", "id": "…" }`. The same agent id on the same team returns the same bot (200). A different name renames it and keeps the id. `GET /teams/:id/bots` lists them. `DELETE /teams/:id/bots/:botId` unregisters one; tasks already pointing at that id are left as they are.
+A registered bot is an identity, not a credential. `POST /teams/:id/bots` with `{ "agentId": "…", "name": "Fin" }` creates a row and returns its id. No `hth_…` secret is minted. That id is the task owner: `{ "type": "bot", "id": "…" }`. The same agent id on the same team returns the same bot (200). A different name renames it and keeps the id. `PATCH /teams/:id/bots/:botId` with `{ "name": "…" }` renames without changing the id. `GET /teams/:id/bots` lists them. `DELETE /teams/:id/bots/:botId` retires one. The owner is unlinked. Tasks already pointing at that id keep it until someone reassigns them.
 
-Anyone who can see the team can register, including the team bot token. A random bot id is rejected with 400 `invalid_owner`. An existing per-bot token can still own a task through the API — that mint stays an escape hatch, and it is not required. The task sheet lists team members and registered bots. Waiting on stays a free-text string, and the sheet leaves it optional when the owner is a bot. Settings can register a bot so it appears there.
+A signed-in person manages this from consent and from Settings. A connector token, including an existing `hth_…` token, cannot register, rename, or retire bots. Consent can name owners, and if the install URL includes `agents` as a JSON array of `{ "agentId", "name" }` those names are offered as tick boxes. Grok Bot's install flow does not send that roster, so the consent page is the lists plus an optional name and agent id, and Settings is where owners are added later. A random bot id is rejected with 400 `invalid_owner`. An existing per-bot token, and an OAuth grant id, can still own a task. The task sheet lists team members and registered bots. Waiting on stays a free-text string, and the sheet leaves it optional when the owner is a bot.
 
 ## Live task events
 
@@ -307,9 +314,19 @@ The web nginx proxy turns off response buffering for `/api/` and waits up to 15 
 
 ## MCP
 
-The API serves a stateless MCP endpoint at `POST /mcp` (Streamable HTTP, JSON responses, no SSE stream). Other methods get 405. Auth is the bot Bearer token, the same `Authorization: Bearer hth_…` header as the REST API. A session cookie is not accepted here.
+The API serves a stateless MCP endpoint at `POST /mcp` (Streamable HTTP, JSON responses, no SSE stream). A request with no bearer, or a bad bearer, is 401 and includes `WWW-Authenticate` with the protected-resource metadata URL. Other methods are 405 once a valid token is present. A session cookie is not accepted here. Auth is `Authorization: Bearer hth_…` or `Authorization: Bearer hoa_…`.
 
-Tools call the task routes above: `create_task` (one step per call; pass `idempotencyKey`; it is sent as `Idempotency-Key`; `owner` can be a registered bot; `projectId` and `areaId` link a project or an area; set `action` to `later` for a future project step, or `do_now`, `delegate`, or `schedule` for an active front; `source` is the email or URL link), `update_task` (change `action` to bring a later step forward or park an active one; null clears a project, area, or source link), `complete_task`, `cancel_task` (optional `outcome`), `delete_task`, `list_tasks` (filter `projectId` and `action` to separate active steps from later ones), and `list_do_immediately` (excludes `later`, done, and cancelled). List filters match `GET /tasks`. Returned tasks include `action`, `source`, `project`, `area`, and `sortOrder`. `create_project` and `update_project` take optional `notes`. `update_project` also takes `areaId` and `archived`. Archiving is rejected while any step is still open. `list_projects` returns `notes` and `area`. `create_area` and `list_areas` manage areas. `register_bot`, `list_bots`, and `unregister_bot` manage bot owners. Omit `teamId` on those when the token belongs to one team.
+Tools call the task routes above: `create_task` (one step per call; pass `idempotencyKey`; it is sent as `Idempotency-Key`; `owner` can be a registered bot; `projectId` and `areaId` link a project or an area; set `action` to `later` for a future project step, or `do_now`, `delegate`, or `schedule` for an active front; `source` is the email or URL link), `update_task` (change `action` to bring a later step forward or park an active one; null clears a project, area, or source link), `complete_task`, `cancel_task` (optional `outcome`), `delete_task`, `list_tasks` (filter `projectId` and `action` to separate active steps from later ones), and `list_do_immediately` (excludes `later`, done, and cancelled). List filters match `GET /tasks`. Returned tasks include `action`, `source`, `project`, `area`, and `sortOrder`. `create_project` and `update_project` take optional `notes`. `update_project` also takes `areaId` and `archived`. Archiving is rejected while any step is still open. `list_projects` returns `notes` and `area`. `create_area` and `list_areas` manage areas. Bot owners are not MCP tools. Omit `teamId` when the token belongs to one team. An OAuth token may belong to several consented teams. Omit `teamId` on that token and the list covers those teams.
+
+### OAuth install
+
+Point the connector at `https://<api-host>/mcp` and leave the header blank. The client reads `/.well-known/oauth-protected-resource`, then the authorization-server metadata, registers with `POST /register` (public client, PKCE S256), and sends the browser to `GET /authorize`. Hearth redirects to `{PUBLIC_URL}/oauth/consent`. A signed-in owner ticks the lists and, if they want, names bot owners. Authorise returns to the client's redirect URI with a code. `POST /token` exchanges it. Access tokens last one hour (`hoa_…`). Refresh tokens rotate (`hor_…`). Using an old refresh token revokes the grant.
+
+Redirect URIs must be https, loopback http (`localhost`, `127.0.0.1`, or `::1`, any port), or one of `cursor://anysphere.cursor-mcp/oauth/callback` and `grokbot://mcp/oauth/callback`. Those two custom schemes are what Grok Bot and Cursor register. Client ID metadata documents are accepted when `client_id` is an https URL. The metadata host must be public.
+
+`GET /teams/:id/connectors` lists grants on that list. `DELETE /teams/:id/connectors/:grantId` drops that list from the grant. The access token picks this up on the next call. The last list revokes the grant. Add, rename, or retire bot owners in Settings. That does not need a new token.
+
+Grok Bot does not send an agent roster on the install URL. If a client does, `agents` is a JSON array of `{ "agentId", "name" }` and the consent page offers them. Otherwise the person types a name and agent id, or skips that and uses Settings.
 
 `POST /mcp` does not stream task changes. The server instructions and the `hearth://task-events` resource point at `GET /teams/:id/events`. See Live task events above.
 
@@ -330,7 +347,7 @@ Cursor, in `~/.cursor/mcp.json` or the project's `.cursor/mcp.json`:
 }
 ```
 
-Grok Bot: Settings → Plugins → add a custom MCP server. Name it Hearth, set the URL to `https://<api-host>/mcp`, and set the header `Authorization` to `Bearer hth_…`. Attach the plugin in the bot chat. Use a static bearer token. This server does not use OAuth.
+Grok Bot: add a custom remote MCP server and set the URL to `https://<api-host>/mcp`. Leave the token blank. Connect sends you to Hearth to authorise lists. An existing `hth_…` header still works until that client moves to OAuth. Grok Bot's connector path is OAuth only.
 
 An Agent SDK connection file is the same URL and header:
 
@@ -353,7 +370,7 @@ Schema changes need a new SQL file under `apps/api/drizzle` and a matching entry
 
 `0005_projects.sql` copies each non-empty `tasks.project` string into a team-scoped project and sets `project_id`, then drops the text column. Strings that are area names (House, Home, Finance, Work, Kitchen, Shed, Admin, Errands, Personal, Health, Family, Career, any case) are left unlinked. Areas are not invented from those strings.
 
-`0006_cancel.sql` adds `cancelled` to task status and `cancelled_at`. `0007_project_notes.sql` adds nullable `projects.notes` (at most 5000 characters) for the support plan. `0008_project_detail.sql` adds `projects.area_id` and `tasks.sort_order`. Neither moves tasks.
+`0006_cancel.sql` adds `cancelled` to task status and `cancelled_at`. `0007_project_notes.sql` adds nullable `projects.notes` (at most 5000 characters) for the support plan. `0008_project_detail.sql` adds `projects.area_id` and `tasks.sort_order`. Neither moves tasks. `0010_oauth.sql` adds OAuth clients, install requests, grants, grant teams, authorisation codes, and access tokens.
 
 ## Not in v1
 

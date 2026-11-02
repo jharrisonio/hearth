@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from "react-router";
 import type { ReactNode } from "react";
 import { useAuth } from "@/auth";
+import { Consent } from "@/pages/Consent";
 import { Home } from "@/pages/Home";
 import { Settings } from "@/pages/Settings";
 import { SignIn } from "@/pages/SignIn";
@@ -9,6 +10,7 @@ export function App() {
   return (
     <Routes>
       <Route path="/signin" element={<SignIn />} />
+      <Route path="/oauth/consent" element={<Consent />} />
       <Route
         path="/"
         element={

@@ -55,7 +55,7 @@ describe("task surface", { concurrency: 1 }, () => {
 
   beforeEach(async () => {
     await pool.query(
-      "TRUNCATE TABLE users, teams, memberships, bot_tokens, bots, projects, areas, tasks, idempotency_keys RESTART IDENTITY CASCADE",
+      "TRUNCATE TABLE users, teams, memberships, bot_tokens, bots, projects, areas, tasks, idempotency_keys, oauth_clients, oauth_requests, oauth_grants, oauth_grant_teams, oauth_codes, oauth_tokens RESTART IDENTITY CASCADE",
     );
   });
 
@@ -132,27 +132,33 @@ describe("task surface", { concurrency: 1 }, () => {
 
   test("registered bots are owners; unknown bots are rejected; tokens still work", async () => {
     const fixture = await seed();
-    const registered = await call(fixture.secret, "POST", `/teams/${fixture.team.id}/bots`, {
-      agentId: "  grok-fin  ",
+    const cookie = cookieFor(fixture.user.id);
+    const blocked = await call(fixture.secret, "POST", `/teams/${fixture.team.id}/bots`, {
+      agentId: "grok-fin",
       name: "Fin",
     });
+    assert.equal(blocked.status, 403);
+    const registered = await call(null, "POST", `/teams/${fixture.team.id}/bots`, {
+      agentId: "  grok-fin  ",
+      name: "Fin",
+    }, undefined, cookie);
     assert.equal(registered.status, 201);
     const bot = botBody(registered.json);
     assert.equal(bot.agentId, "grok-fin");
     assert.equal(bot.name, "Fin");
     assert.equal("secret" in (registered.json as object), false);
 
-    const again = await call(fixture.secret, "POST", `/teams/${fixture.team.id}/bots`, {
+    const again = await call(null, "POST", `/teams/${fixture.team.id}/bots`, {
       agentId: "grok-fin",
       name: "Fin",
-    });
+    }, undefined, cookie);
     assert.equal(again.status, 200);
     assert.equal(botBody(again.json).id, bot.id);
 
-    const renamed = await call(fixture.secret, "POST", `/teams/${fixture.team.id}/bots`, {
+    const renamed = await call(null, "POST", `/teams/${fixture.team.id}/bots`, {
       agentId: "grok-fin",
       name: "Finley",
-    });
+    }, undefined, cookie);
     assert.equal(renamed.status, 200);
     assert.equal(botBody(renamed.json).id, bot.id);
     assert.equal(botBody(renamed.json).name, "Finley");
@@ -186,7 +192,7 @@ describe("task surface", { concurrency: 1 }, () => {
     assert.equal(asToken.status, 201);
     assert.equal(taskBody(asToken.json).owner.id, fixture.tokenId);
 
-    const removed = await call(fixture.secret, "DELETE", `/teams/${fixture.team.id}/bots/${bot.id}`);
+    const removed = await call(null, "DELETE", `/teams/${fixture.team.id}/bots/${bot.id}`, undefined, undefined, cookie);
     assert.equal(removed.status, 200);
     const after = await postTask(fixture.secret, {
       teamId: fixture.team.id,
@@ -208,7 +214,13 @@ describe("task surface", { concurrency: 1 }, () => {
     assert.equal(anon.status, 401);
 
     const get = await app.request("/mcp", { method: "GET" });
-    assert.equal(get.status, 405);
+    assert.equal(get.status, 401);
+    assert.match(get.headers.get("www-authenticate") ?? "", /resource_metadata=/);
+    const authedGet = await app.request("/mcp", {
+      method: "GET",
+      headers: { authorization: `Bearer ${fixture.secret}` },
+    });
+    assert.equal(authedGet.status, 405);
 
     const init = await rpc(fixture.secret, "initialize", {
       protocolVersion: "2025-03-26",
@@ -231,15 +243,15 @@ describe("task surface", { concurrency: 1 }, () => {
       "create_task",
       "delete_task",
       "list_areas",
-      "list_bots",
       "list_do_immediately",
       "list_projects",
       "list_tasks",
-      "register_bot",
-      "unregister_bot",
       "update_project",
       "update_task",
     ]);
+    assert.equal(tools.includes("register_bot"), false);
+    assert.equal(tools.includes("list_bots"), false);
+    assert.equal(tools.includes("unregister_bot"), false);
     const description = (name: string) => listedTools.find((tool) => tool.name === name)?.description ?? "";
     assert.match(description("create_task"), /action later/);
     assert.match(description("update_task"), /later/);
@@ -249,12 +261,13 @@ describe("task surface", { concurrency: 1 }, () => {
     assert.match(description("update_project"), /notes/);
     assert.match(description("list_projects"), /notes/);
 
-    const registered = toolJson(
-      await rpc(fixture.secret, "tools/call", {
-        name: "register_bot",
-        arguments: { agentId: "grok-rally", name: "Rally" },
-      }),
-    ) as { id: string; name: string; agentId: string };
+    const cookie = cookieFor(fixture.user.id);
+    const registeredResponse = await call(null, "POST", `/teams/${fixture.team.id}/bots`, {
+      agentId: "grok-rally",
+      name: "Rally",
+    }, undefined, cookie);
+    assert.equal(registeredResponse.status, 201);
+    const registered = botBody(registeredResponse.json);
     assert.equal(registered.name, "Rally");
     assert.equal(registered.agentId, "grok-rally");
 
@@ -368,15 +381,12 @@ describe("task surface", { concurrency: 1 }, () => {
     assert.equal(done.status, "done");
     assert.equal(done.outcome, "Left on the table");
 
-    const botsListed = toolJson(await rpc(fixture.secret, "tools/call", { name: "list_bots", arguments: {} })) as {
-      bots: { id: string }[];
-    };
-    assert.deepEqual(botsListed.bots.map((bot) => bot.id), [registered.id]);
+    const botsListed = await call(null, "GET", `/teams/${fixture.team.id}/bots`, undefined, undefined, cookie);
+    assert.deepEqual((botsListed.json as { bots: { id: string }[] }).bots.map((bot) => bot.id), [registered.id]);
 
-    const removed = toolJson(
-      await rpc(fixture.secret, "tools/call", { name: "unregister_bot", arguments: { id: registered.id } }),
-    ) as { id: string };
-    assert.equal(removed.id, registered.id);
+    const removed = await call(null, "DELETE", `/teams/${fixture.team.id}/bots/${registered.id}`, undefined, undefined, cookie);
+    assert.equal(removed.status, 200);
+    assert.equal(botBody(removed.json).id, registered.id);
     const rows = await db.select().from(bots).where(and(eq(bots.teamId, fixture.team.id)));
     assert.equal(rows.length, 0);
   });
@@ -842,10 +852,10 @@ describe("task surface", { concurrency: 1 }, () => {
     const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     const future = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
-    const registered = await call(fixture.secret, "POST", `/teams/${fixture.team.id}/bots`, {
+    const registered = await call(null, "POST", `/teams/${fixture.team.id}/bots`, {
       agentId: "grok-fin",
       name: "Fin",
-    });
+    }, undefined, cookie);
     assert.equal(registered.status, 201);
     const fin = botBody(registered.json);
 

@@ -26,7 +26,7 @@ describe("task events", { concurrency: 1 }, () => {
 
   beforeEach(async () => {
     await pool.query(
-      "TRUNCATE TABLE users, teams, memberships, bot_tokens, bots, projects, areas, tasks, idempotency_keys RESTART IDENTITY CASCADE",
+      "TRUNCATE TABLE users, teams, memberships, bot_tokens, bots, projects, areas, tasks, idempotency_keys, oauth_clients, oauth_requests, oauth_grants, oauth_grant_teams, oauth_codes, oauth_tokens RESTART IDENTITY CASCADE",
     );
   });
 

@@ -4,7 +4,10 @@ import type {
   AuthConfig,
   BotSummary,
   BotTokenSummary,
+  ConnectorSummary,
   CurrentUser,
+  OAuthAgent,
+  OAuthRequestPreview,
   DeletedTask,
   Member,
   ProjectSummary,
@@ -85,6 +88,17 @@ export const api = {
     request<BotSummary>(`/teams/${teamId}/bots`, { method: "POST", body: JSON.stringify(body) }),
   unregisterBot: (teamId: string, botId: string) =>
     request<BotSummary>(`/teams/${teamId}/bots/${botId}`, { method: "DELETE" }),
+  renameBot: (teamId: string, botId: string, name: string) =>
+    request<BotSummary>(`/teams/${teamId}/bots/${botId}`, { method: "PATCH", body: JSON.stringify({ name }) }),
+  connectors: (teamId: string) => request<{ connectors: ConnectorSummary[] }>(`/teams/${teamId}/connectors`),
+  disconnectConnector: (teamId: string, grantId: string) =>
+    request<{ grantRevoked: boolean }>(`/teams/${teamId}/connectors/${grantId}`, { method: "DELETE" }),
+  oauthRequest: (requestId: string) =>
+    request<OAuthRequestPreview>(`/oauth/request?request=${encodeURIComponent(requestId)}`),
+  oauthConsent: (body: { request: string; teamIds: string[]; bots?: OAuthAgent[] }) =>
+    request<{ redirectTo: string }>("/oauth/consent", { method: "POST", body: JSON.stringify(body) }),
+  oauthDeny: (requestId: string) =>
+    request<{ redirectTo: string }>("/oauth/consent/deny", { method: "POST", body: JSON.stringify({ request: requestId }) }),
   projects: (teamId: string, includeArchived = false) =>
     request<{ projects: ProjectSummary[] }>(
       `/teams/${teamId}/projects${includeArchived ? "?includeArchived=true" : ""}`,
