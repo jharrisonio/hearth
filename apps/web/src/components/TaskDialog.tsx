@@ -5,7 +5,6 @@ import {
   type Action,
   type AreaSummary,
   type BotSummary,
-  type BotTokenSummary,
   type Member,
   type ProjectSummary,
   type SourceType,
@@ -81,7 +80,7 @@ function TaskForm({
   const seeded = task ? { important: task.important, urgent: task.urgent } : axesFor(defaultAction);
   const [members, setMembers] = useState<Member[]>([]);
   const [bots, setBots] = useState<BotSummary[]>([]);
-  const [tokens, setTokens] = useState<BotTokenSummary[]>([]);
+  const [ownersLoaded, setOwnersLoaded] = useState(false);
   const [title, setTitle] = useState(task?.title ?? "");
   const [detail, setDetail] = useState(task?.detail ?? "");
   const [action, setAction] = useState<Action>(task?.action ?? defaultAction);
@@ -100,21 +99,23 @@ function TaskForm({
   const [owner, setOwner] = useState(task ? ownerKey(task.owner.type, task.owner.id) : ownerKey("user", defaultOwnerId));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const activeTokens = tokens.filter((token) => token.revokedAt == null || token.id === task?.owner.id);
-  const knownBots = new Set([...bots.map((bot) => bot.id), ...activeTokens.map((token) => token.id)]);
-  const unknownBot = task?.owner.type === "bot" && !knownBots.has(task.owner.id) ? task.owner.id : null;
   const suggested = suggestAction(important, urgent);
+  const ownerChoices = new Set([
+    ...members.map((member) => ownerKey("user", member.userId)),
+    ...bots.map((bot) => ownerKey("bot", bot.id)),
+  ]);
+  const keepCurrentOwner = ownersLoaded && task != null && !ownerChoices.has(owner);
 
   useEffect(() => {
     let cancelled = false;
-    void Promise.all([api.team(teamId), api.bots(teamId), api.tokens(teamId), api.projects(teamId), api.areas(teamId)])
-      .then(([detailResponse, botList, tokenList, projectList, areaList]) => {
+    void Promise.all([api.team(teamId), api.bots(teamId), api.projects(teamId), api.areas(teamId)])
+      .then(([detailResponse, botList, projectList, areaList]) => {
         if (cancelled) return;
         setMembers(detailResponse.members);
         setBots(botList.bots);
-        setTokens(tokenList.tokens);
         setProjects(withCurrent(projectList.projects, task?.project ?? null, teamId));
         setAreas(withCurrent(areaList.areas, task?.area ?? null, teamId));
+        setOwnersLoaded(true);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -296,13 +297,7 @@ function TaskForm({
               {bot.name}
             </option>
           ))}
-          {activeTokens.map((token) => (
-            <option key={token.id} value={ownerKey("bot", token.id)}>
-              {token.label}
-              {token.revokedAt ? " (revoked)" : ""}
-            </option>
-          ))}
-          {unknownBot ? <option value={ownerKey("bot", unknownBot)}>Unregistered bot</option> : null}
+          {keepCurrentOwner ? <option value={owner}>Current owner</option> : null}
         </select>
       </label>
       <div className="grid grid-cols-1 gap-x-6 sm:grid-cols-2">

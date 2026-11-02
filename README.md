@@ -240,7 +240,7 @@ curl -sS -D - -b /tmp/hearth.cj -H 'content-type: application/json' \
 
 A registered bot is an identity, not a credential. `POST /teams/:id/bots` with `{ "agentId": "…", "name": "Fin" }` creates a row and returns its id. No `hth_…` secret is minted. That id is the task owner: `{ "type": "bot", "id": "…" }`. The same agent id on the same team returns the same bot (200). A different name renames it and keeps the id. `GET /teams/:id/bots` lists them. `DELETE /teams/:id/bots/:botId` unregisters one; tasks already pointing at that id are left as they are.
 
-Anyone who can see the team can register, including the team bot token. A random bot id is rejected with 400 `invalid_owner`. An existing per-bot token can still own a task — that mint stays an escape hatch, and it is not required. Settings in the web app can register a bot and assign it on a task.
+Anyone who can see the team can register, including the team bot token. A random bot id is rejected with 400 `invalid_owner`. An existing per-bot token can still own a task through the API — that mint stays an escape hatch, and it is not required. The task sheet lists team members and registered bots. Waiting on stays a free-text string. Settings can register a bot so it appears there.
 
 ## Live task events
 
