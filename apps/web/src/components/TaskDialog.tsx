@@ -403,7 +403,7 @@ function TaskForm({
               onClick={() => selectAction(item)}
               className={cn(
                 "relative py-2.5 text-[10px] font-normal uppercase tracking-[0.32em] transition-colors duration-200",
-                on ? "text-white" : "text-[#4a4a4a] hover:text-[#8a8a8a]",
+                on ? "text-white" : "text-[#a8a8a8] hover:text-white",
               )}
             >
               {actionLabel[item]}
@@ -559,7 +559,7 @@ function TaskForm({
         </>
       ) : null}
       {task && task.status !== "open" && task.outcome ? (
-        <p className="mt-6 text-[13px] text-white/60">
+        <p className="mt-6 text-[13px] text-[#a8a8a8]">
           {task.status === "cancelled" ? "Cancelled" : "Outcome"}: {task.outcome}
         </p>
       ) : null}
@@ -567,7 +567,7 @@ function TaskForm({
       <footer className="relative z-10 shrink-0 bg-black px-7 pb-[calc(26px+env(safe-area-inset-bottom))] pt-6 before:pointer-events-none before:absolute before:inset-x-0 before:-top-10 before:h-10 before:bg-gradient-to-b before:from-transparent before:to-black before:content-['']">
         {error ? <p className="mb-4 text-[13px] text-[#c9a35a]">{error}</p> : null}
         {task && saveLabel ? (
-          <p className="mb-4 text-center text-[10px] font-normal uppercase tracking-[0.32em] text-[#5c5c5c]" aria-live="polite">
+          <p className="mb-4 text-center text-[10px] font-normal uppercase tracking-[0.32em] text-[#a8a8a8]" aria-live="polite">
             {saveLabel}
           </p>
         ) : null}
@@ -858,7 +858,7 @@ function ProjectField({
           <button
             type="button"
             onClick={() => onChange("")}
-            className="shrink-0 text-[10px] font-normal uppercase tracking-[0.28em] text-[#8a8a8a] hover:text-white"
+            className="shrink-0 text-[10px] font-normal uppercase tracking-[0.28em] text-[#a8a8a8] hover:text-white"
           >
             Clear
           </button>
@@ -908,7 +908,7 @@ function ProjectField({
                 }}
               >
                 {option.name}
-                {option.archivedAt ? <span className="ml-3 text-[10px] uppercase tracking-[0.28em] text-[#555]">Archived</span> : null}
+                {option.archivedAt ? <span className="ml-3 text-[10px] uppercase tracking-[0.28em] text-[#a8a8a8]">Archived</span> : null}
               </button>
             </li>
           ))}
@@ -916,7 +916,7 @@ function ProjectField({
             <li>
               <button
                 type="button"
-                className="block w-full py-2.5 text-left text-[15px] font-light text-[#8a8a8a] transition-colors duration-150 hover:text-white"
+                className="block w-full py-2.5 text-left text-[15px] font-light text-[#a8a8a8] transition-colors duration-150 hover:text-white"
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => void add()}
                 disabled={adding}
@@ -925,7 +925,7 @@ function ProjectField({
               </button>
             </li>
           ) : null}
-          {matches.length === 0 && !needle ? <li className="py-2.5 text-[13px] text-[#666]">No projects yet.</li> : null}
+          {matches.length === 0 && !needle ? <li className="py-2.5 text-[13px] text-[#a8a8a8]">No projects yet.</li> : null}
         </ul>
       ) : null}
       <p className={hintClass}>Search by name. The name opens that project.</p>

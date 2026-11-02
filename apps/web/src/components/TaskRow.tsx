@@ -21,7 +21,7 @@ export function TaskRow({
         <span className="pointer-events-none absolute inset-x-0 bottom-1 h-px origin-left scale-x-0 bg-white transition-transform duration-[250ms] ease-[cubic-bezier(0.2,0.6,0.2,1)] group-hover:scale-x-100" />
       </button>
       {project || task.area ? (
-        <p className="mt-1 text-[10px] font-normal uppercase tracking-[0.28em] text-[#5c5c5c]">
+        <p className="mt-1 text-[10px] font-normal uppercase tracking-[0.28em] text-[#a8a8a8]">
           {project ? (
             onOpenProject ? (
               <button

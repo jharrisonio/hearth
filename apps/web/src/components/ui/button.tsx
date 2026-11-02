@@ -8,11 +8,11 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "py-3 text-[#8a8a8a] hover:text-white",
+        default: "py-3 text-[#a8a8a8] hover:text-white",
         solid: "bg-white px-[26px] py-3.5 text-black! hover:opacity-85",
-        secondary: "py-3 text-[#8a8a8a] hover:text-white",
-        ghost: "py-3 text-[#8a8a8a] hover:text-white",
-        danger: "py-3 text-[#8a8a8a] hover:text-white",
+        secondary: "py-3 text-[#a8a8a8] hover:text-white",
+        ghost: "py-3 text-[#a8a8a8] hover:text-white",
+        danger: "py-3 text-[#a8a8a8] hover:text-white",
       },
       size: {
         default: "",
