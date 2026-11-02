@@ -106,8 +106,8 @@ export const api = {
   doImmediately: (teamId?: string) =>
     request<TaskList>(`/tasks/do-immediately${teamId ? `?teamId=${teamId}` : ""}`),
   createTask: (body: unknown) => request<Task>("/tasks", { method: "POST", body: JSON.stringify(body) }),
-  updateTask: (id: string, body: unknown) =>
-    request<Task>(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  updateTask: (id: string, body: unknown, keepalive = false) =>
+    request<Task>(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(body), keepalive }),
   completeTask: (id: string, outcome: string) =>
     request<Task>(`/tasks/${id}/complete`, { method: "POST", body: JSON.stringify({ outcome }) }),
   cancelTask: (id: string, outcome?: string) =>

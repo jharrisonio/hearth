@@ -56,7 +56,7 @@ function CompleteForm({ task, onClose, onSaved }: { task: Task; onClose: () => v
         <textarea className={fieldClass} rows={3} value={outcome} onChange={(event) => setOutcome(event.target.value)} autoFocus required />
       </label>
       {error ? <p className="mt-4 text-[13px] text-[#c9a35a]">{error}</p> : null}
-      <div className="mt-12 flex items-center justify-end gap-7">
+      <div className="sticky bottom-0 z-[1] mt-12 flex items-center justify-end gap-7 bg-black pt-4">
         <Button type="button" variant="ghost" onClick={onClose}>
           Cancel
         </Button>

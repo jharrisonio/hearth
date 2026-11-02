@@ -12,8 +12,9 @@ import {
   type Task,
   type TaskLink,
   type TaskSource,
+  type UpdateTaskInput,
 } from "@hearth/shared";
-import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { DeleteDialog } from "@/components/DeleteDialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -48,7 +49,7 @@ export function TaskDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent layer={layer}>
+      <DialogContent pinned layer={layer}>
         {open ? (
           <TaskForm
             key={task?.id ?? "new"}
@@ -108,9 +109,9 @@ function TaskForm({
   const [owner, setOwner] = useState(task ? ownerKey(task.owner.type, task.owner.id) : ownerKey("user", defaultOwnerId));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
   const [cancelling, setCancelling] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const busy = saving || cancelling;
   const suggested = suggestAction(important, urgent);
   const parsedOwner = parseOwnerKey(owner);
   const waitingRequired = delegateRequiresWaitingOn(action, parsedOwner);
@@ -160,6 +161,37 @@ function TaskForm({
     };
   }, [teamId]);
 
+  const draft = readDraft({
+    title,
+    detail,
+    action,
+    waitingOn,
+    calendarEventId,
+    projectId,
+    areaId,
+    sourceType,
+    sourceHref,
+    sourceLabel,
+    dueAt,
+    important,
+    urgent,
+    owner,
+    existingSource: task?.source ?? null,
+  });
+  const savedRef = useRef<Draft | null>(null);
+  if (savedRef.current === null) savedRef.current = draft;
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const taskIdRef = useRef(task?.id ?? null);
+  taskIdRef.current = task?.id ?? null;
+  const onSavedRef = useRef(onSaved);
+  onSavedRef.current = onSaved;
+  const skipFlushRef = useRef(false);
+  const didSaveRef = useRef(false);
+  const mountedRef = useRef(true);
+  const chainRef = useRef(Promise.resolve(true));
+  const commitRef = useRef<() => Promise<boolean>>(async () => true);
+
   function selectAction(next: Action) {
     setAction(next);
     if (next === "delegate" && !dueAt) {
@@ -169,12 +201,126 @@ function TaskForm({
     }
   }
 
+  async function runSave(): Promise<boolean> {
+    const id = taskIdRef.current;
+    const saved = savedRef.current;
+    if (!id || !saved || skipFlushRef.current) return true;
+    const sent = draftRef.current;
+    const look = lookAt(saved, sent);
+    if (look.blocked || !look.patch) {
+      if (mountedRef.current) {
+        setSaveState(look.blocked || look.notice || !didSaveRef.current ? "idle" : "saved");
+        setError(look.notice);
+      }
+      return true;
+    }
+    if (mountedRef.current) {
+      setSaveState("saving");
+      if (!look.notice) setError(null);
+    }
+    try {
+      await api.updateTask(id, look.patch, !mountedRef.current);
+    } catch (err) {
+      if (mountedRef.current) {
+        setSaveState("idle");
+        setError(err instanceof ApiError ? err.message : "Could not save the task.");
+      }
+      return false;
+    }
+    savedRef.current = applyDraft(saved, sent, look.patch);
+    didSaveRef.current = true;
+    onSavedRef.current();
+    const next = lookAt(savedRef.current, draftRef.current);
+    if (next.patch && !next.blocked && !skipFlushRef.current) return runSave();
+    if (mountedRef.current) {
+      setSaveState(next.blocked || next.notice ? "idle" : "saved");
+      setError(next.notice);
+    }
+    return true;
+  }
+
+  commitRef.current = () => {
+    const run = chainRef.current.then(runSave);
+    chainRef.current = run.then(
+      () => true,
+      () => false,
+    );
+    return run;
+  };
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      void commitRef.current();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!task) return;
+    const flush = () => void commitRef.current();
+    const onHide = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", onHide);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", onHide);
+    };
+  }, [task]);
+
+  useEffect(() => {
+    if (!task) return;
+    const look = lookAt(savedRef.current ?? draftRef.current, draftRef.current);
+    if (look.blocked) {
+      setSaveState("idle");
+      setError(look.notice);
+      return;
+    }
+    if (!look.patch && !look.notice) {
+      setSaveState(didSaveRef.current ? "saved" : "idle");
+      setError(null);
+      return;
+    }
+    if (look.patch) {
+      setSaveState("saving");
+      if (!look.notice) setError(null);
+    } else {
+      setSaveState(didSaveRef.current ? "saved" : "idle");
+    }
+    const timer = window.setTimeout(() => void commitRef.current(), 500);
+    return () => window.clearTimeout(timer);
+  }, [
+    task,
+    title,
+    detail,
+    action,
+    waitingOn,
+    calendarEventId,
+    projectId,
+    areaId,
+    sourceType,
+    sourceHref,
+    sourceLabel,
+    dueAt,
+    important,
+    urgent,
+    owner,
+  ]);
+
   async function onCancelTask() {
-    if (!task || busy) return;
+    if (!task || cancelling) return;
     setCancelling(true);
     setError(null);
+    const savedOk = await commitRef.current();
+    if (!savedOk) {
+      setCancelling(false);
+      return;
+    }
     try {
       await api.cancelTask(task.id, "cancelled");
+      skipFlushRef.current = true;
       onSaved();
       onClose();
     } catch (err) {
@@ -185,42 +331,41 @@ function TaskForm({
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
-    if (busy) return;
-    const parsedOwner = parseOwnerKey(owner);
-    if (!title.trim()) {
-      setError("A task needs a title.");
+    if (task) {
+      await commitRef.current();
       return;
     }
-    if (delegateRequiresWaitingOn(action, parsedOwner) && !waitingOn.trim()) {
+    if (saving || cancelling) return;
+    if (!draft.title || !draft.owner) {
+      setError(draft.title ? "Choose an owner." : "A task needs a title.");
+      return;
+    }
+    if (delegateRequiresWaitingOn(draft.action, draft.owner) && !draft.waitingOn) {
       setError("Say who or what this is waiting on.");
       return;
     }
-    if (!parsedOwner) {
-      setError("Choose an owner.");
+    if (!draft.sourceReady) {
+      setError(draft.sourceNotice ?? "Source needs an http(s) link.");
       return;
     }
-    const source = sourceFromForm();
-    if (source === "invalid") return;
     setSaving(true);
     setError(null);
-    setConfirmingDelete(false);
     const body = {
-      title: title.trim(),
-      detail: detail.trim() || null,
-      action,
-      waitingOn: action === "delegate" ? waitingOn.trim() : null,
-      ...(action === "schedule" ? { calendarEventId: calendarEventId.trim() || null } : {}),
-      projectId: projectId || null,
-      areaId: areaId || null,
-      source,
-      dueAt: action === "delegate" && !task && !dueAt ? undefined : fromLocalInput(dueAt),
-      important,
-      urgent,
-      owner: parsedOwner,
+      title: draft.title,
+      detail: draft.detail,
+      action: draft.action,
+      waitingOn: draft.waitingOn,
+      ...(draft.action === "schedule" ? { calendarEventId: draft.calendarEventId } : {}),
+      projectId: draft.projectId,
+      areaId: draft.areaId,
+      source: draft.source,
+      dueAt: draft.action === "delegate" && !dueAt ? undefined : draft.dueAt,
+      important: draft.important,
+      urgent: draft.urgent,
+      owner: draft.owner,
     };
     try {
-      if (task) await api.updateTask(task.id, body);
-      else await api.createTask({ ...body, teamId });
+      await api.createTask({ ...body, teamId });
       onSaved();
       onClose();
     } catch (err) {
@@ -230,34 +375,18 @@ function TaskForm({
     }
   }
 
-  function sourceFromForm(): TaskSource | null | "invalid" {
-    const href = sourceHref.trim();
-    const label = sourceLabel.trim();
-    if (!sourceType && !href && !label) return null;
-    if (sourceType !== "email" && sourceType !== "url") {
-      setError("Choose email or link for the source.");
-      return "invalid";
-    }
-    if (!isHttpUrl(href)) {
-      setError("Source needs an http(s) link.");
-      return "invalid";
-    }
-    const externalId =
-      task?.source && task.source.type === sourceType && task.source.href === href ? task.source.externalId : undefined;
-    return {
-      type: sourceType,
-      href,
-      ...(label ? { label } : {}),
-      ...(externalId ? { externalId } : {}),
-    };
-  }
-
   const previewHref = isHttpUrl(sourceHref.trim()) ? sourceHref.trim() : null;
+  const saveLabel = saveState === "saving" ? "Saving" : saveState === "saved" ? "Saved" : "";
 
   return (
-    <form onSubmit={(event) => void onSubmit(event)}>
-      <DialogTitle>{task ? "Task" : "New task"}</DialogTitle>
+    <form className="flex min-h-0 flex-1 flex-col" onSubmit={(event) => void onSubmit(event)}>
+      <header className="shrink-0 px-7 pt-[env(safe-area-inset-top)]">
+        <div className="flex h-16 items-center">
+          <DialogTitle className="mb-0">{task ? "Task" : "New task"}</DialogTitle>
+        </div>
+      </header>
       <DialogDescription className="sr-only">Important and urgent choose do now, delegate, schedule, or later.</DialogDescription>
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-7 pb-8 pt-4">
       <label className={labelClass}>
         Title
         <input className={fieldClass} value={title} onChange={(event) => setTitle(event.target.value)} autoFocus required />
@@ -434,41 +563,214 @@ function TaskForm({
           {task.status === "cancelled" ? "Cancelled" : "Outcome"}: {task.outcome}
         </p>
       ) : null}
-      {error ? <p className="mt-4 text-[13px] text-[#c9a35a]">{error}</p> : null}
-      <div className="mt-16 flex flex-wrap items-center justify-between gap-x-7 gap-y-4">
-        <div className="flex items-center gap-7">
-          {task ? (
-            <Button type="button" variant="ghost" onClick={() => setConfirmingDelete(true)} disabled={busy}>
-              Delete
-            </Button>
-          ) : null}
-          {task && task.status === "open" ? (
-            <Button type="button" variant="ghost" onClick={() => void onCancelTask()} disabled={busy}>
-              {cancelling ? "Cancelling…" : "Cancel"}
-            </Button>
-          ) : null}
-        </div>
-        <div className="flex items-center gap-7">
-          <Button type="submit" variant={task ? "ghost" : "solid"} disabled={busy}>
-            {saving ? "Saving…" : task ? "Save" : "Add"}
-          </Button>
-          {task && task.status === "open" ? (
-            <Button type="button" variant="solid" onClick={() => onComplete(task)} disabled={busy}>
-              Complete
-            </Button>
-          ) : null}
-        </div>
       </div>
+      <footer className="relative z-10 shrink-0 bg-black px-7 pb-[calc(26px+env(safe-area-inset-bottom))] pt-6 before:pointer-events-none before:absolute before:inset-x-0 before:-top-10 before:h-10 before:bg-gradient-to-b before:from-transparent before:to-black before:content-['']">
+        {error ? <p className="mb-4 text-[13px] text-[#c9a35a]">{error}</p> : null}
+        {task && saveLabel ? (
+          <p className="mb-4 text-center text-[10px] font-normal uppercase tracking-[0.32em] text-[#5c5c5c]" aria-live="polite">
+            {saveLabel}
+          </p>
+        ) : null}
+        <div className="flex flex-wrap items-center justify-between gap-x-7 gap-y-4">
+          <div className="flex items-center gap-7">
+            {task ? (
+              <Button type="button" variant="ghost" onClick={() => setConfirmingDelete(true)} disabled={cancelling}>
+                Delete
+              </Button>
+            ) : null}
+            {task && task.status === "open" ? (
+              <Button type="button" variant="ghost" onClick={() => void onCancelTask()} disabled={cancelling}>
+                {cancelling ? "Cancelling…" : "Cancel"}
+              </Button>
+            ) : null}
+          </div>
+          <div className="flex items-center gap-7">
+            {task ? null : (
+              <Button type="submit" variant="solid" disabled={saving}>
+                {saving ? "Saving…" : "Add"}
+              </Button>
+            )}
+            {task && task.status === "open" ? (
+              <Button
+                type="button"
+                variant="solid"
+                onClick={() => {
+                  void (async () => {
+                    const ok = await commitRef.current();
+                    onComplete(ok && title.trim() ? { ...task, title: title.trim() } : task);
+                  })();
+                }}
+                disabled={cancelling}
+              >
+                Complete
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      </footer>
       <DeleteDialog
         task={confirmingDelete && task ? task : null}
         onClose={() => setConfirmingDelete(false)}
         onDeleted={() => {
+          skipFlushRef.current = true;
           onSaved();
           onClose();
         }}
       />
     </form>
   );
+}
+
+const SAVE_FIELDS = ["title", "detail", "action", "waitingOn", "calendarEventId", "projectId", "areaId", "source", "dueAt", "important", "urgent", "owner"] as const;
+
+type Draft = {
+  title: string;
+  detail: string | null;
+  action: Action;
+  waitingOn: string | null;
+  calendarEventId: string | null;
+  projectId: string | null;
+  areaId: string | null;
+  source: TaskSource | null;
+  sourceReady: boolean;
+  sourceNotice: string | null;
+  dueAt: string | null;
+  important: boolean;
+  urgent: boolean;
+  owner: { type: "user" | "bot"; id: string } | null;
+};
+
+function readDraft(input: {
+  title: string;
+  detail: string;
+  action: Action;
+  waitingOn: string;
+  calendarEventId: string;
+  projectId: string;
+  areaId: string;
+  sourceType: SourceType | "";
+  sourceHref: string;
+  sourceLabel: string;
+  dueAt: string;
+  important: boolean;
+  urgent: boolean;
+  owner: string;
+  existingSource: TaskSource | null;
+}): Draft {
+  const href = input.sourceHref.trim();
+  const label = input.sourceLabel.trim();
+  let source: TaskSource | null = null;
+  let sourceReady = true;
+  let sourceNotice: string | null = null;
+  if (input.sourceType || href || label) {
+    if (input.sourceType !== "email" && input.sourceType !== "url") {
+      sourceReady = false;
+      sourceNotice = "Choose email or link for the source.";
+    } else if (!isHttpUrl(href)) {
+      sourceReady = false;
+      sourceNotice = "Source needs an http(s) link.";
+    } else {
+      const externalId =
+        input.existingSource && input.existingSource.type === input.sourceType && input.existingSource.href === href
+          ? input.existingSource.externalId
+          : undefined;
+      source = {
+        type: input.sourceType,
+        href,
+        ...(label ? { label } : {}),
+        ...(externalId ? { externalId } : {}),
+      };
+    }
+  }
+  return {
+    title: input.title.trim(),
+    detail: input.detail.trim() || null,
+    action: input.action,
+    waitingOn: input.action === "delegate" ? input.waitingOn.trim() || null : null,
+    calendarEventId: input.calendarEventId.trim() || null,
+    projectId: input.projectId || null,
+    areaId: input.areaId || null,
+    source,
+    sourceReady,
+    sourceNotice,
+    dueAt: fromLocalInput(input.dueAt),
+    important: input.important,
+    urgent: input.urgent,
+    owner: parseOwnerKey(input.owner),
+  };
+}
+
+function lookAt(saved: Draft, current: Draft): { patch: UpdateTaskInput | null; notice: string | null; blocked: boolean } {
+  if (!current.title) return { patch: null, notice: "A task needs a title.", blocked: true };
+  if (!current.owner) return { patch: null, notice: "Choose an owner.", blocked: true };
+  const delegateBlocked = delegateRequiresWaitingOn(current.action, current.owner) && !current.waitingOn;
+  const delegateDirty = current.action !== saved.action || current.waitingOn !== saved.waitingOn;
+  const ownerHeld =
+    delegateBlocked &&
+    current.owner != null &&
+    (saved.owner?.type !== current.owner.type || saved.owner?.id !== current.owner.id);
+  let notice: string | null = null;
+  if (delegateBlocked && (delegateDirty || ownerHeld)) notice = "Say who or what this is waiting on.";
+  else if (!current.sourceReady && current.sourceNotice) notice = current.sourceNotice;
+  return { patch: diffDraft(saved, current), notice, blocked: false };
+}
+
+function diffDraft(saved: Draft, current: Draft): UpdateTaskInput | null {
+  const patch: UpdateTaskInput = {};
+  if (current.title !== saved.title) patch.title = current.title;
+  if (current.detail !== saved.detail) patch.detail = current.detail;
+  if (current.important !== saved.important) patch.important = current.important;
+  if (current.urgent !== saved.urgent) patch.urgent = current.urgent;
+  if (current.projectId !== saved.projectId) patch.projectId = current.projectId;
+  if (current.areaId !== saved.areaId) patch.areaId = current.areaId;
+  if (current.dueAt !== saved.dueAt) patch.dueAt = current.dueAt;
+  const ownerChanged = Boolean(
+    current.owner && (!saved.owner || current.owner.type !== saved.owner.type || current.owner.id !== saved.owner.id),
+  );
+  const delegateBlocked = delegateRequiresWaitingOn(current.action, current.owner) && !current.waitingOn;
+  if (ownerChanged && current.owner && !(delegateBlocked && current.owner.type !== "bot")) {
+    patch.owner = current.owner;
+  }
+  if (!delegateBlocked && (current.action !== saved.action || current.waitingOn !== saved.waitingOn)) {
+    patch.action = current.action;
+    patch.waitingOn = current.waitingOn;
+  }
+  const persistedAction = patch.action ?? (delegateBlocked ? saved.action : current.action);
+  if (persistedAction === "schedule" && current.calendarEventId !== saved.calendarEventId) {
+    patch.calendarEventId = current.calendarEventId;
+  }
+  if (current.sourceReady && sourceKey(current.source) !== sourceKey(saved.source)) patch.source = current.source;
+  return SAVE_FIELDS.some((key) => key in patch) ? patch : null;
+}
+
+function applyDraft(saved: Draft, sent: Draft, patch: UpdateTaskInput): Draft {
+  return {
+    ...saved,
+    title: patch.title !== undefined ? sent.title : saved.title,
+    detail: patch.detail !== undefined ? sent.detail : saved.detail,
+    important: patch.important !== undefined ? sent.important : saved.important,
+    urgent: patch.urgent !== undefined ? sent.urgent : saved.urgent,
+    projectId: patch.projectId !== undefined ? sent.projectId : saved.projectId,
+    areaId: patch.areaId !== undefined ? sent.areaId : saved.areaId,
+    dueAt: patch.dueAt !== undefined ? sent.dueAt : saved.dueAt,
+    owner: patch.owner !== undefined ? sent.owner : saved.owner,
+    action: patch.action !== undefined ? sent.action : saved.action,
+    waitingOn: patch.waitingOn !== undefined ? sent.waitingOn : saved.waitingOn,
+    calendarEventId: patch.calendarEventId !== undefined ? sent.calendarEventId : saved.calendarEventId,
+    source: patch.source !== undefined ? sent.source : saved.source,
+    sourceReady: true,
+    sourceNotice: null,
+  };
+}
+
+function sourceKey(source: TaskSource | null) {
+  if (!source) return "";
+  return JSON.stringify({
+    type: source.type,
+    href: source.href,
+    label: source.label ?? null,
+    externalId: source.externalId ?? null,
+  });
 }
 
 function withCurrent<T extends { id: string; name: string }>(

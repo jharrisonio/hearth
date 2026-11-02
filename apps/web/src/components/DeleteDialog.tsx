@@ -47,7 +47,7 @@ function DeleteForm({ task, onClose, onDeleted }: { task: Task; onClose: () => v
         This removes the task. It does not stay for audit.
       </p>
       {error ? <p className="mt-4 text-[13px] text-[#c9a35a]">{error}</p> : null}
-      <div className="mt-12 flex items-center justify-end gap-7">
+      <div className="sticky bottom-0 z-[1] mt-12 flex items-center justify-end gap-7 bg-black pt-4">
         <Button type="button" variant="ghost" onClick={onClose} disabled={deleting}>
           Keep
         </Button>
