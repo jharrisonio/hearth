@@ -69,6 +69,8 @@ export const projects = pgTable(
       .notNull()
       .references(() => teams.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
+    /** Natural-planning notes. The steps are tasks linked to this project. */
+    notes: text("notes"),
     archivedAt: timestamp("archived_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

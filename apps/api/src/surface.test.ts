@@ -47,6 +47,8 @@ describe("task surface", { concurrency: 1 }, () => {
       assert.equal(has("projects", column), true, `projects.${column}`);
       assert.equal(has("areas", column), true, `areas.${column}`);
     }
+    assert.equal(has("projects", "notes"), true);
+    assert.equal(has("areas", "notes"), false);
   });
 
   beforeEach(async () => {
@@ -217,7 +219,8 @@ describe("task surface", { concurrency: 1 }, () => {
     assert.ok(initResult.capabilities?.tools);
 
     const listed = await rpc(fixture.secret, "tools/list");
-    const tools = (rpcResult(listed.json) as { tools: { name: string }[] }).tools.map((tool) => tool.name).sort();
+    const listedTools = (rpcResult(listed.json) as { tools: { name: string; description?: string }[] }).tools;
+    const tools = listedTools.map((tool) => tool.name).sort();
     assert.deepEqual(tools, [
       "cancel_task",
       "complete_task",
@@ -232,8 +235,17 @@ describe("task surface", { concurrency: 1 }, () => {
       "list_tasks",
       "register_bot",
       "unregister_bot",
+      "update_project",
       "update_task",
     ]);
+    const description = (name: string) => listedTools.find((tool) => tool.name === name)?.description ?? "";
+    assert.match(description("create_task"), /action later/);
+    assert.match(description("update_task"), /later/);
+    assert.match(description("list_tasks"), /projectId/);
+    assert.match(description("list_do_immediately"), /later/);
+    assert.match(description("create_project"), /notes/);
+    assert.match(description("update_project"), /notes/);
+    assert.match(description("list_projects"), /notes/);
 
     const registered = toolJson(
       await rpc(fixture.secret, "tools/call", {
@@ -288,10 +300,19 @@ describe("task surface", { concurrency: 1 }, () => {
     const project = toolJson(
       await rpc(fixture.secret, "tools/call", {
         name: "create_project",
-        arguments: { name: "Tara AU returns" },
+        arguments: { name: "Tara AU returns", notes: "  Lodge, then confirm.  " },
       }),
-    ) as { id: string; name: string };
+    ) as { id: string; name: string; notes: string | null };
     assert.equal(project.name, "Tara AU returns");
+    assert.equal(project.notes, "Lodge, then confirm.");
+    const revised = toolJson(
+      await rpc(fixture.secret, "tools/call", {
+        name: "update_project",
+        arguments: { id: project.id, notes: "Lodge first" },
+      }),
+    ) as { id: string; notes: string | null };
+    assert.equal(revised.id, project.id);
+    assert.equal(revised.notes, "Lodge first");
     const sameProject = toolJson(
       await rpc(fixture.secret, "tools/call", {
         name: "create_project",
@@ -511,13 +532,19 @@ describe("task surface", { concurrency: 1 }, () => {
     assert.equal(created.status, 201);
     const project = namedBody(created.json);
     assert.equal(project.name, "Novus switch");
+    assert.equal(project.notes, null);
     const again = await call(fixture.secret, "POST", `/teams/${fixture.team.id}/projects`, { name: "novus switch" });
     assert.equal(again.status, 200);
     assert.equal(namedBody(again.json).id, project.id);
+    assert.equal(namedBody(again.json).name, "Novus switch");
+    assert.equal(namedBody(again.json).notes, null);
 
     const areaResponse = await call(fixture.secret, "POST", `/teams/${fixture.team.id}/areas`, { name: "House" });
     assert.equal(areaResponse.status, 201);
     const area = namedBody(areaResponse.json);
+    assert.equal("notes" in (areaResponse.json as object), false);
+    const areaNotes = await call(fixture.secret, "POST", `/teams/${fixture.team.id}/areas`, { name: "Garden", notes: "nope" });
+    assert.equal(areaNotes.status, 400);
     const clash = await call(fixture.secret, "PATCH", `/teams/${fixture.team.id}/projects/${project.id}`, {
       name: "Novus switch",
     });
@@ -535,6 +562,22 @@ describe("task surface", { concurrency: 1 }, () => {
     assert.equal(foreign.status, 400);
     assert.equal(errorBody(foreign.json).code, "invalid_project");
 
+    const noted = await call(fixture.secret, "PATCH", `/teams/${fixture.team.id}/projects/${project.id}`, {
+      notes: "  Call the bank, then close.  ",
+    });
+    assert.equal(noted.status, 200);
+    assert.equal(namedBody(noted.json).notes, "Call the bank, then close.");
+    const keptNotes = await call(fixture.secret, "POST", `/teams/${fixture.team.id}/projects`, { name: "novus switch" });
+    assert.equal(keptNotes.status, 200);
+    assert.equal(namedBody(keptNotes.json).notes, "Call the bank, then close.");
+    const replacedNotes = await call(fixture.secret, "POST", `/teams/${fixture.team.id}/projects`, {
+      name: "novus switch",
+      notes: "Close the account",
+    });
+    assert.equal(replacedNotes.status, 200);
+    assert.equal(namedBody(replacedNotes.json).name, "Novus switch");
+    assert.equal(namedBody(replacedNotes.json).notes, "Close the account");
+
     const task = await postTask(fixture.secret, {
       teamId: fixture.team.id,
       title: "Switch the account",
@@ -543,8 +586,33 @@ describe("task surface", { concurrency: 1 }, () => {
     });
     assert.equal(task.status, 201);
     const body = taskBody(task.json);
+    assert.equal(body.action, "later");
     assert.deepEqual(body.project, { id: project.id, name: "Novus switch" });
     assert.deepEqual(body.area, { id: area.id, name: "House" });
+
+    const front = await postTask(fixture.secret, {
+      teamId: fixture.team.id,
+      title: "Email the accountant",
+      action: "do_now",
+      important: true,
+      urgent: true,
+      projectId: project.id,
+    });
+    const secondFront = await postTask(fixture.secret, {
+      teamId: fixture.team.id,
+      title: "Download the statements",
+      action: "do_now",
+      important: true,
+      urgent: true,
+      projectId: project.id,
+    });
+    assert.equal(front.status, 201);
+    assert.equal(secondFront.status, 201);
+    const queue = await call(fixture.secret, "GET", `/tasks/do-immediately?teamId=${fixture.team.id}`);
+    const queuedIds = new Set((queue.json as { tasks: { id: string; action: string }[] }).tasks.map((row) => row.id));
+    assert.equal(queuedIds.has(taskBody(front.json).id), true);
+    assert.equal(queuedIds.has(taskBody(secondFront.json).id), true);
+    assert.equal(queuedIds.has(body.id), false);
 
     const listed = await call(
       fixture.secret,
@@ -574,6 +642,7 @@ describe("task surface", { concurrency: 1 }, () => {
     assert.equal(restored.status, 200);
     assert.equal(namedBody(restored.json).archivedAt, null);
     assert.equal(namedBody(restored.json).id, project.id);
+    assert.equal(namedBody(restored.json).notes, "Close the account");
 
     const [second] = await db.insert(projects).values({ teamId: fixture.team.id, name: "Tara AU returns" }).returning();
     assert.ok(second);
@@ -802,6 +871,7 @@ function taskBody(json: unknown) {
     id: string;
     owner: { type: string; id: string };
     title: string;
+    action: string;
     source: unknown;
     project: { id: string; name: string } | null;
     area: { id: string; name: string } | null;
@@ -812,7 +882,7 @@ function taskBody(json: unknown) {
 }
 
 function namedBody(json: unknown) {
-  const row = json as { id: string; name: string; archivedAt: string | null };
+  const row = json as { id: string; name: string; archivedAt: string | null; notes?: string | null };
   assert.equal(typeof row.id, "string");
   assert.equal(typeof row.name, "string");
   return row;

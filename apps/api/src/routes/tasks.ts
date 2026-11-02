@@ -346,7 +346,12 @@ function assertDelegate(action: Action, waitingOn: string | null) {
   }
 }
 
-/** Same membership as `inMorningQueue` in @hearth/shared. Schedule is strictly past; delegate includes due now. */
+/**
+ * Same membership as `inMorningQueue` in @hearth/shared.
+ * Schedule is strictly past; delegate includes due now.
+ * `later` is excluded, including future steps on a project.
+ * Several do_now, delegate, or schedule tasks may share a project; this does not limit them.
+ */
 function morningQueueFilter() {
   return sql`(
     ${tasks.action} = 'do_now'

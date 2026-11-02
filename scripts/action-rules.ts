@@ -10,13 +10,17 @@
 import { readFileSync } from "node:fs";
 import {
   FOLLOW_UP_MS,
+  createAreaSchema,
+  createProjectSchema,
   createTaskSchema,
   followUpFrom,
   inMorningQueue,
   isHttpUrl,
+  isProjectFront,
   listTasksQuerySchema,
   resolveNeedsCalendar,
   suggestAction,
+  updateProjectSchema,
   updateTaskSchema,
   type Action,
 } from "../packages/shared/src/index.js";
@@ -179,6 +183,16 @@ function checkMigrationSql() {
   const journal = readFileSync(new URL("../apps/api/drizzle/meta/_journal.json", import.meta.url), "utf8");
   assert(journal.includes("0001_action"), "journal lists the action migration");
   assert(journal.includes("0005_projects"), "journal lists the projects migration");
+  assert(journal.includes("0006_cancel"), "journal lists the cancel migration");
+  assert(journal.includes("0007_project_notes"), "journal lists the project notes migration");
+  const notesSql = readFileSync(new URL("../apps/api/drizzle/0007_project_notes.sql", import.meta.url), "utf8");
+  assert(notesSql.includes('ADD COLUMN "notes" text'), "projects gain a notes column");
+  assert(notesSql.includes("char_length(\"notes\") <= 5000"), "project notes are capped");
+  assert(createProjectSchema.parse({ name: "Tara", notes: "  plan  " }).notes === "plan", "project notes are trimmed");
+  assert(updateProjectSchema.parse({ notes: null }).notes === null, "project notes can be cleared");
+  assert(!createAreaSchema.safeParse({ name: "House", notes: "nope" }).success, "areas do not take notes");
+  assert(isProjectFront("do_now") && isProjectFront("delegate") && isProjectFront("schedule"), "three actions are fronts");
+  assert(!isProjectFront("later"), "later is support, not a front");
   const projectsSql = readFileSync(new URL("../apps/api/drizzle/0005_projects.sql", import.meta.url), "utf8");
   assert(projectsSql.includes('DROP COLUMN "project"'), "free-text project column is dropped");
   assert(projectsSql.includes("('house')") && projectsSql.includes("('finance')"), "area names are not migrated into projects");

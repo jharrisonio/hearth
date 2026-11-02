@@ -1,7 +1,7 @@
 import type { AreaSummary, ProjectSummary } from "@hearth/shared";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { db } from "./db.js";
-import { HttpError } from "./errors.js";
+import { blankToNull, HttpError } from "./errors.js";
 import { iso } from "./http.js";
 import { areas, projects } from "./schema.js";
 
@@ -18,8 +18,8 @@ function noun(kind: Kind) {
   return kind === "project" ? "Project" : "Area";
 }
 
-export function toNamed(row: NamedRow): ProjectSummary | AreaSummary {
-  return {
+export function toNamed(kind: Kind, row: NamedRow): ProjectSummary | AreaSummary {
+  const summary = {
     id: row.id,
     teamId: row.teamId,
     name: row.name,
@@ -27,6 +27,8 @@ export function toNamed(row: NamedRow): ProjectSummary | AreaSummary {
     createdAt: iso(row.createdAt) ?? new Date(0).toISOString(),
     updatedAt: iso(row.updatedAt) ?? new Date(0).toISOString(),
   };
+  if (kind === "project") return { ...summary, notes: row.notes ?? null };
+  return summary;
 }
 
 export async function listNamed(kind: Kind, teamId: string, includeArchived: boolean) {
@@ -39,22 +41,35 @@ export async function listNamed(kind: Kind, teamId: string, includeArchived: boo
     .orderBy(table(kind).name, table(kind).createdAt);
 }
 
-/** Same name on the team returns the existing row. An archived row is restored. */
-export async function createNamed(kind: Kind, teamId: string, name: string) {
+/**
+ * Same name on the team returns the existing row. An archived row is restored.
+ * For a project, `notes` when provided replaces the stored plan. Omit it to leave the plan alone.
+ */
+export async function createNamed(kind: Kind, teamId: string, name: string, notes?: string | null) {
   const normalised = name.trim();
+  const notesProvided = kind === "project" && notes !== undefined;
+  const storedNotes = notesProvided ? blankToNull(notes) ?? null : null;
   const existing = await findByName(kind, teamId, normalised);
   if (existing) {
-    if (!existing.archivedAt) return { row: existing, created: false };
+    if (!existing.archivedAt && !notesProvided) return { row: existing, created: false };
     const [row] = await db
       .update(table(kind))
-      .set({ name: normalised, archivedAt: null, updatedAt: new Date() })
+      .set({
+        name: existing.archivedAt ? normalised : existing.name,
+        archivedAt: null,
+        updatedAt: new Date(),
+        ...(notesProvided ? { notes: storedNotes } : {}),
+      })
       .where(eq(table(kind).id, existing.id))
       .returning();
     if (!row) throw new Error(`Failed to restore ${kind}`);
     return { row, created: false };
   }
   try {
-    const [row] = await db.insert(table(kind)).values({ teamId, name: normalised }).returning();
+    const [row] = await db
+      .insert(table(kind))
+      .values(kind === "project" ? { teamId, name: normalised, notes: storedNotes } : { teamId, name: normalised })
+      .returning();
     if (!row) throw new Error(`Failed to create ${kind}`);
     return { row, created: true };
   } catch (err) {
@@ -69,7 +84,7 @@ export async function updateNamed(
   kind: Kind,
   teamId: string,
   id: string,
-  input: { name?: string; archived?: boolean },
+  input: { name?: string; archived?: boolean; notes?: string | null },
 ) {
   const [existing] = await db
     .select()
@@ -87,10 +102,11 @@ export async function updateNamed(
   let archivedAt = existing.archivedAt;
   if (input.archived === true) archivedAt = existing.archivedAt ?? new Date();
   if (input.archived === false) archivedAt = null;
+  const notes = kind === "project" && input.notes !== undefined ? blankToNull(input.notes) ?? null : undefined;
   try {
     const [row] = await db
       .update(table(kind))
-      .set({ name, archivedAt, updatedAt: new Date() })
+      .set({ name, archivedAt, updatedAt: new Date(), ...(notes !== undefined ? { notes } : {}) })
       .where(and(eq(table(kind).id, id), eq(table(kind).teamId, teamId)))
       .returning();
     if (!row) throw new HttpError(404, "not_found", `${noun(kind)} not found.`);
