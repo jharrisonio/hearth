@@ -1,14 +1,12 @@
 import { taskEventTypes, type Task, type TaskEvent, type TaskEventType } from "@hearth/shared";
-import { eq } from "drizzle-orm";
 import type { Context } from "hono";
 import { streamSSE } from "hono/streaming";
 import pg from "pg";
 import { z } from "zod";
 import { assertActorCurrent, type AppEnv } from "./actor.js";
-import { db, pool, poolConfig } from "./db.js";
+import { pool, poolConfig } from "./db.js";
 import { HttpError } from "./errors.js";
-import { tasks } from "./schema.js";
-import { toTask } from "./task-json.js";
+import { loadTaskView } from "./task-json.js";
 
 /**
  * Postgres NOTIFY payload cap is 8000 bytes, so the notice is only ids.
@@ -102,14 +100,14 @@ export async function handleRemoteNotification(payload: string) {
   }
   if (note.origin === taskEventOrigin) return;
   if (!subscribers.get(note.teamId)?.size) return;
-  const [row] = await db.select().from(tasks).where(eq(tasks.id, note.taskId)).limit(1);
-  if (!row || row.teamId !== note.teamId) return;
+  const task = await loadTaskView(note.taskId);
+  if (!task || task.teamId !== note.teamId) return;
   deliverLocal({
     type: note.type,
     teamId: note.teamId,
     taskId: note.taskId,
     at: note.at,
-    task: toTask(row),
+    task,
   });
 }
 

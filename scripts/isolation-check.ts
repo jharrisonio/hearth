@@ -303,7 +303,7 @@ async function main() {
 async function checkOrder(cookie: string, teamId: string, stamp: string) {
   const due = (day: number) => new Date(Date.UTC(2026, 10, day, 0, 0, 0)).toISOString();
   const make = (title: string, fields: Record<string, unknown>) =>
-    createTask(cookie, { teamId, title: `${stamp} ${title}`, project: `isolation-${stamp}`, ...fields });
+    createTask(cookie, { teamId, title: `${stamp} ${title}`, ...fields });
 
   const neitherOlder = await make("neither-older", { action: "do_now", important: false, urgent: false });
   const neitherNewer = await make("neither-newer", { action: "do_now", important: false, urgent: false });
@@ -333,7 +333,7 @@ async function checkActions(cookie: string, teamId: string, stamp: string) {
   const future = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
   const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
   const make = (title: string, fields: Record<string, unknown>) =>
-    createTask(cookie, { teamId, title: `${stamp} ${title}`, project: `isolation-${stamp}`, ...fields });
+    createTask(cookie, { teamId, title: `${stamp} ${title}`, ...fields });
 
   const doNow = await make("filter-do-now", { action: "do_now", dueAt: future });
   const scheduleNeeds = await make("filter-schedule-needs", { action: "schedule", dueAt: future });

@@ -1,4 +1,4 @@
-import type { AuthConfig, BotSummary, BotTokenSummary, Member, TeamSummary } from "@hearth/shared";
+import type { AreaSummary, AuthConfig, BotSummary, BotTokenSummary, Member, ProjectSummary, TeamSummary } from "@hearth/shared";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { useAuth } from "@/auth";
@@ -18,6 +18,8 @@ export function Settings() {
   const [members, setMembers] = useState<Member[]>([]);
   const [tokens, setTokens] = useState<BotTokenSummary[]>([]);
   const [bots, setBots] = useState<BotSummary[]>([]);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [areas, setAreas] = useState<AreaSummary[]>([]);
   const [email, setEmail] = useState("");
   const [agentId, setAgentId] = useState("");
   const [botName, setBotName] = useState("");
@@ -34,11 +36,19 @@ export function Settings() {
   async function load(id: string) {
     setError(null);
     try {
-      const [detail, tokenList, botList] = await Promise.all([api.team(id), api.tokens(id), api.bots(id)]);
+      const [detail, tokenList, botList, projectList, areaList] = await Promise.all([
+        api.team(id),
+        api.tokens(id),
+        api.bots(id),
+        api.projects(id, true),
+        api.areas(id, true),
+      ]);
       setTeam(detail.team);
       setMembers(detail.members);
       setTokens(tokenList.tokens);
       setBots(botList.bots);
+      setProjects(projectList.projects);
+      setAreas(areaList.areas);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not load this team.");
     } finally {
@@ -290,6 +300,44 @@ export function Settings() {
               </form>
             ) : null}
 
+            <Catalogue
+              title="Projects"
+              hint="Outcomes that take more than one step, such as Tara AU returns. Not a domain like House or Finance."
+              placeholder="New project"
+              items={projects}
+              onCreate={async (name) => {
+                await api.createProject(teamId!, name);
+                setNotice("Project saved.");
+                await load(teamId!);
+              }}
+              onArchive={async (id, archived) => {
+                await api.updateProject(teamId!, id, { archived });
+                setNotice(archived ? "Project archived." : "Project restored.");
+                await load(teamId!);
+              }}
+              setError={setError}
+              setNotice={setNotice}
+            />
+
+            <Catalogue
+              title="Areas"
+              hint="Domains of life or work, such as House or Finance. Separate from projects."
+              placeholder="New area"
+              items={areas}
+              onCreate={async (name) => {
+                await api.createArea(teamId!, name);
+                setNotice("Area saved.");
+                await load(teamId!);
+              }}
+              onArchive={async (id, archived) => {
+                await api.updateArea(teamId!, id, { archived });
+                setNotice(archived ? "Area archived." : "Area restored.");
+                await load(teamId!);
+              }}
+              setError={setError}
+              setNotice={setNotice}
+            />
+
             <h3 className={subheadClass}>Bots</h3>
             <p className="mb-2 text-[13px] font-light text-[#5c5c5c]">
               A registered bot is a name you can put on a task. It does not get a secret. One team token can post for all of them.
@@ -404,5 +452,82 @@ export function Settings() {
         ) : null}
       </main>
     </div>
+  );
+}
+
+function Catalogue({
+  title,
+  hint,
+  placeholder,
+  items,
+  onCreate,
+  onArchive,
+  setError,
+  setNotice,
+}: {
+  title: string;
+  hint: string;
+  placeholder: string;
+  items: ProjectSummary[];
+  onCreate: (name: string) => Promise<void>;
+  onArchive: (id: string, archived: boolean) => Promise<void>;
+  setError: (message: string | null) => void;
+  setNotice: (message: string | null) => void;
+}) {
+  const [draft, setDraft] = useState("");
+
+  async function create(event: React.FormEvent) {
+    event.preventDefault();
+    const name = draft.trim();
+    if (!name) return;
+    setNotice(null);
+    setError(null);
+    try {
+      await onCreate(name);
+      setDraft("");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : `Could not add that ${title.toLowerCase().replace(/s$/, "")}.`);
+    }
+  }
+
+  async function archive(id: string, archived: boolean) {
+    setNotice(null);
+    setError(null);
+    try {
+      await onArchive(id, archived);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not update that.");
+    }
+  }
+
+  return (
+    <>
+      <h3 className={subheadClass}>{title}</h3>
+      <p className="mb-2 text-[13px] font-light text-[#5c5c5c]">{hint}</p>
+      <ul>
+        {items.length === 0 ? <li className="py-3.5 text-[13px] text-[#666]">None yet.</li> : null}
+        {items.map((item) => (
+          <li
+            key={item.id}
+            className="flex flex-wrap items-baseline justify-between gap-3 border-b border-[#1c1c1c] py-3.5 text-[14px] font-light"
+          >
+            <span className={item.archivedAt ? "text-[#666]" : undefined}>
+              {item.name}
+              {item.archivedAt ? " · archived" : ""}
+            </span>
+            <Button size="sm" variant="ghost" onClick={() => void archive(item.id, !item.archivedAt)}>
+              {item.archivedAt ? "Restore" : "Archive"}
+            </Button>
+          </li>
+        ))}
+      </ul>
+      <form onSubmit={(event) => void create(event)} className="mt-2 flex items-end gap-4">
+        <label className="block min-w-0 flex-1">
+          <span className="sr-only">{placeholder}</span>
+          <input className={fieldClass} value={draft} placeholder={placeholder} onChange={(event) => setDraft(event.target.value)} />
+        </label>
+        <Button type="submit">Add</Button>
+      </form>
+    </>
   );
 }

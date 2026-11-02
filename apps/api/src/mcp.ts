@@ -1,17 +1,23 @@
 import {
   completeTaskToolSchema,
+  createAreaSchema,
+  createAreaToolSchema,
+  createProjectSchema,
+  createProjectToolSchema,
   createTaskSchema,
   createTaskToolSchema,
   doImmediatelyQuerySchema,
   httpOperations,
   IDEMPOTENCY_KEY_HEADER,
   listBotsToolSchema,
+  listNamedToolSchema,
   listTasksQuerySchema,
   registerBotSchema,
   registerBotToolSchema,
   unregisterBotToolSchema,
   updateTaskSchema,
   updateTaskToolSchema,
+  type ListNamedToolInput,
   type ListTasksQuery,
 } from "@hearth/shared";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -41,7 +47,7 @@ export async function handleMcp(c: Context, app: FetchApp): Promise<Response> {
     { name: "hearth", version: SERVER_VERSION },
     {
       instructions:
-        "Hearth tasks for the team this bot token belongs to. Pass idempotencyKey on create_task when a retry must return the original task instead of a duplicate. The key lasts 24 hours for this bot. Register Fin, Rally, and other agents with register_bot (agent id and display name, no extra token) and set owner to that bot id. Set source to { type: \"email\" | \"url\", href, label?, externalId? } to link the originating email or page. For Gmail, href is https://mail.google.com/mail/u/0/#all/<threadId> and externalId is the message or thread id. Pass source: null on update_task to clear it. Live edits are not pushed over MCP. Subscribe with GET /teams/:teamId/events (text/event-stream, same Bearer token). Read the hearth://task-events resource for the exact URL and the event shape.",
+        "Hearth tasks for the team this bot token belongs to. Pass idempotencyKey on create_task when a retry must return the original task instead of a duplicate. The key lasts 24 hours for this bot. A project is a multi-step outcome; an area is a life or work domain such as House or Finance. Link them with projectId and areaId. Register Fin, Rally, and other agents with register_bot (agent id and display name, no extra token) and set owner to that bot id. Set source to { type: \"email\" | \"url\", href, label?, externalId? } to link the originating email or page. For Gmail, href is https://mail.google.com/mail/u/0/#all/<threadId> and externalId is the message or thread id. Pass source: null on update_task to clear it. Live edits are not pushed over MCP. Subscribe with GET /teams/:teamId/events (text/event-stream, same Bearer token). Read the hearth://task-events resource for the exact URL and the event shape.",
     },
   );
   registerTaskTools(server, app, authorization ?? "");
@@ -103,7 +109,7 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "create_task",
     {
       description:
-        "Create a task (POST /tasks). idempotencyKey is sent as the Idempotency-Key header. The same key and body, for this bot, returns the original task for 24 hours. A different body with that key is rejected. owner, when type bot, must be a bot registered on the team (or an existing token id). source, when set, is { type: \"email\" | \"url\", href, label?, externalId? }. href is an http(s) URL. For Gmail, type is email and href is the mail.google.com deep link.",
+        "Create a task (POST /tasks). idempotencyKey is sent as the Idempotency-Key header. The same key and body, for this bot, returns the original task for 24 hours. A different body with that key is rejected. owner, when type bot, must be a bot registered on the team (or an existing token id). projectId and areaId link a project or an area on the same team. source, when set, is { type: \"email\" | \"url\", href, label?, externalId? }. href is an http(s) URL. For Gmail, type is email and href is the mail.google.com deep link.",
       inputSchema: createTaskToolSchema,
     },
     async ({ idempotencyKey, ...body }) => {
@@ -122,7 +128,7 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "update_task",
     {
       description:
-        "Update a task (PATCH /tasks/:id). Status cannot be changed here. Complete the task with complete_task. owner, when type bot, must be a bot registered on the team (or an existing token id). source replaces the link; null clears it. Omit source to leave the link unchanged.",
+        "Update a task (PATCH /tasks/:id). Status cannot be changed here. Complete the task with complete_task. owner, when type bot, must be a bot registered on the team (or an existing token id). Pass projectId or areaId as a uuid to set that link, or null to clear it. Omit either field to leave it unchanged. source replaces the link; null clears it. Omit source to leave the link unchanged.",
       inputSchema: updateTaskToolSchema,
     },
     async ({ id, ...patch }) => {
@@ -153,7 +159,7 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "list_tasks",
     {
       description:
-        "List tasks (GET /tasks). Each task includes source (an email or url link, or null). Filters: teamId, action (do_now, delegate, schedule, later), status (open or done), important, urgent, owner (user:<uuid> or bot:<uuid>), dueBefore, project, mine. Omit teamId to use this bot's team.",
+        "List tasks (GET /tasks). Each task includes source (an email or url link, or null), plus project and area when set. Filters: teamId, action (do_now, delegate, schedule, later), status (open or done), important, urgent, owner (user:<uuid> or bot:<uuid>), dueBefore, projectId, areaId, mine. Omit teamId to use this bot's team.",
       inputSchema: listTasksQuerySchema,
     },
     async (query) => asTool(await callApi(app, authorization, `${httpOperations.listTasks.path}${queryString(query)}`)),
@@ -168,6 +174,72 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     },
     async (query) =>
       asTool(await callApi(app, authorization, `${httpOperations.listDoImmediately.path}${queryString(query)}`)),
+  );
+
+  server.registerTool(
+    "create_project",
+    {
+      description:
+        "Create a project on a team (POST /teams/:id/projects). A project is a multi-step outcome, not a life area. The same name returns the existing project and restores it if it was archived. Omit teamId when this token belongs to one team.",
+      inputSchema: createProjectToolSchema,
+    },
+    async ({ teamId, name }) => {
+      const resolved = await resolveTeamId(app, authorization, teamId);
+      if ("failure" in resolved) return asTool(resolved.failure);
+      const parsed = createProjectSchema.parse({ name });
+      return asTool(await callApi(app, authorization, `/teams/${resolved.teamId}/projects`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(parsed),
+      }));
+    },
+  );
+
+  server.registerTool(
+    "list_projects",
+    {
+      description:
+        "List projects on a team (GET /teams/:id/projects). Archived projects are omitted unless includeArchived is true. Omit teamId when this token belongs to one team.",
+      inputSchema: listNamedToolSchema,
+    },
+    async (query) => {
+      const resolved = await resolveTeamId(app, authorization, query.teamId);
+      if ("failure" in resolved) return asTool(resolved.failure);
+      return asTool(await callApi(app, authorization, `/teams/${resolved.teamId}/projects${namedQuery(query)}`));
+    },
+  );
+
+  server.registerTool(
+    "create_area",
+    {
+      description:
+        "Create an area on a team (POST /teams/:id/areas). An area is a life or work domain, such as House or Finance, not a project. The same name returns the existing area and restores it if it was archived. Omit teamId when this token belongs to one team.",
+      inputSchema: createAreaToolSchema,
+    },
+    async ({ teamId, name }) => {
+      const resolved = await resolveTeamId(app, authorization, teamId);
+      if ("failure" in resolved) return asTool(resolved.failure);
+      const parsed = createAreaSchema.parse({ name });
+      return asTool(await callApi(app, authorization, `/teams/${resolved.teamId}/areas`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(parsed),
+      }));
+    },
+  );
+
+  server.registerTool(
+    "list_areas",
+    {
+      description:
+        "List areas on a team (GET /teams/:id/areas). Archived areas are omitted unless includeArchived is true. Omit teamId when this token belongs to one team.",
+      inputSchema: listNamedToolSchema,
+    },
+    async (query) => {
+      const resolved = await resolveTeamId(app, authorization, query.teamId);
+      if ("failure" in resolved) return asTool(resolved.failure);
+      return asTool(await callApi(app, authorization, `/teams/${resolved.teamId}/areas${namedQuery(query)}`));
+    },
   );
 
   server.registerTool(
@@ -266,6 +338,10 @@ function asTool(result: ApiResult) {
     };
   }
   return { content: [{ type: "text" as const, text: JSON.stringify(result.body) }] };
+}
+
+function namedQuery(query: ListNamedToolInput) {
+  return query.includeArchived ? "?includeArchived=true" : "";
 }
 
 function queryString(query: ListTasksQuery | { teamId?: string }) {

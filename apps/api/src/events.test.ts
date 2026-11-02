@@ -26,7 +26,7 @@ describe("task events", { concurrency: 1 }, () => {
 
   beforeEach(async () => {
     await pool.query(
-      "TRUNCATE TABLE users, teams, memberships, bot_tokens, bots, tasks, idempotency_keys RESTART IDENTITY CASCADE",
+      "TRUNCATE TABLE users, teams, memberships, bot_tokens, bots, projects, areas, tasks, idempotency_keys RESTART IDENTITY CASCADE",
     );
   });
 
@@ -131,6 +131,8 @@ describe("task events", { concurrency: 1 }, () => {
       await stream.readUntil((text) => taskEvents(text).some((event) => event.taskId === id && event.type === "created"));
       const createdEvent = taskEvents(stream.text()).find((event) => event.taskId === id && event.type === "created");
       assert.deepEqual(createdEvent?.task.source, gmailSource);
+      assert.equal(createdEvent?.task.project, null);
+      assert.equal(createdEvent?.task.area, null);
 
       const replay = await postTask(
         fixture.secret,
@@ -142,11 +144,23 @@ describe("task events", { concurrency: 1 }, () => {
       await idle(150);
       assert.equal(taskEvents(stream.text()).filter((event) => event.taskId === id).length, 1);
 
-      const patched = await call(fixture.secret, "PATCH", `/tasks/${id}`, { title: "Bins tonight" });
+      const project = await call(fixture.secret, "POST", `/teams/${fixture.team.id}/projects`, { name: "Novus switch" });
+      const area = await call(fixture.secret, "POST", `/teams/${fixture.team.id}/areas`, { name: "House" });
+      assert.equal(project.status, 201);
+      assert.equal(area.status, 201);
+      const projectId = (project.json as { id: string }).id;
+      const areaId = (area.json as { id: string }).id;
+      const patched = await call(fixture.secret, "PATCH", `/tasks/${id}`, {
+        title: "Bins tonight",
+        projectId,
+        areaId,
+      });
       assert.equal(patched.status, 200);
       await stream.readUntil((text) => taskEvents(text).some((event) => event.type === "updated" && event.task.title === "Bins tonight"));
-      const updatedEvent = taskEvents(stream.text()).find((event) => event.type === "updated");
-      assert.deepEqual(updatedEvent?.task.source, gmailSource);
+      const updated = taskEvents(stream.text()).find((event) => event.type === "updated");
+      assert.deepEqual(updated?.task.source, gmailSource);
+      assert.deepEqual(updated?.task.project, { id: projectId, name: "Novus switch" });
+      assert.deepEqual(updated?.task.area, { id: areaId, name: "House" });
 
       const done = await call(fixture.secret, "POST", `/tasks/${id}/complete`, { outcome: "Out front" });
       assert.equal(done.status, 200);
@@ -461,6 +475,8 @@ type TaskEventBody = {
     updatedAt: string;
     outcome: string | null;
     source: typeof gmailSource | null;
+    project: { id: string; name: string } | null;
+    area: { id: string; name: string } | null;
   };
 };
 

@@ -1,10 +1,12 @@
 import type {
   Action,
+  AreaSummary,
   AuthConfig,
   BotSummary,
   BotTokenSummary,
   CurrentUser,
   Member,
+  ProjectSummary,
   Task,
   TaskList,
   TaskStatus,
@@ -43,7 +45,8 @@ export type TaskQuery = {
   urgent?: boolean;
   owner?: string;
   dueBefore?: string;
-  project?: string;
+  projectId?: string;
+  areaId?: string;
   mine?: boolean;
 };
 
@@ -81,6 +84,20 @@ export const api = {
     request<BotSummary>(`/teams/${teamId}/bots`, { method: "POST", body: JSON.stringify(body) }),
   unregisterBot: (teamId: string, botId: string) =>
     request<BotSummary>(`/teams/${teamId}/bots/${botId}`, { method: "DELETE" }),
+  projects: (teamId: string, includeArchived = false) =>
+    request<{ projects: ProjectSummary[] }>(
+      `/teams/${teamId}/projects${includeArchived ? "?includeArchived=true" : ""}`,
+    ),
+  createProject: (teamId: string, name: string) =>
+    request<ProjectSummary>(`/teams/${teamId}/projects`, { method: "POST", body: JSON.stringify({ name }) }),
+  updateProject: (teamId: string, id: string, body: { name?: string; archived?: boolean }) =>
+    request<ProjectSummary>(`/teams/${teamId}/projects/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  areas: (teamId: string, includeArchived = false) =>
+    request<{ areas: AreaSummary[] }>(`/teams/${teamId}/areas${includeArchived ? "?includeArchived=true" : ""}`),
+  createArea: (teamId: string, name: string) =>
+    request<AreaSummary>(`/teams/${teamId}/areas`, { method: "POST", body: JSON.stringify({ name }) }),
+  updateArea: (teamId: string, id: string, body: { name?: string; archived?: boolean }) =>
+    request<AreaSummary>(`/teams/${teamId}/areas/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   tasks: (query: TaskQuery) => request<TaskList>(`/tasks${queryString(query)}`),
   doImmediately: (teamId?: string) =>
     request<TaskList>(`/tasks/do-immediately${teamId ? `?teamId=${teamId}` : ""}`),
