@@ -136,6 +136,7 @@ A task:
   "calendarEventId": null,
   "needsCalendar": false,
   "project": "Kitchen",
+  "source": null,
   "dueAt": "2026-11-02T00:00:00.000Z",
   "outcome": null,
   "createdAt": "2026-11-01T00:00:00.000Z",
@@ -150,6 +151,25 @@ A task:
 `waitingOn` is required when `action` is `delegate`. On create, omit `dueAt` for a delegated task and the follow-up is set three days ahead. That date is the nudge. Sending `dueAt: null` stores no follow-up; the task joins the morning queue once it is more than three days old. `outcome` is required when the task is completed.
 
 `calendarEventId` is an optional calendar event id. The server keeps `needsCalendar` in line with it: a `schedule` task with no id is stored with `needsCalendar` true, and any id forces `needsCalendar` false. You can omit `needsCalendar`.
+
+`source` is an optional link back to where the task came from. It is `null`, or:
+
+```json
+{
+  "type": "email",
+  "href": "https://mail.google.com/mail/u/0/#all/18f2c4e8a1b2c3d4",
+  "label": "Re: oat milk",
+  "externalId": "18f2c4e8a1b2c3d4"
+}
+```
+
+`type` is `email` or `url`. `href` is an http or https URL; the web app opens it in a new tab. `label` is optional display text, such as a subject. `externalId` is optional and is the provider's own id, not the link. Omit `label` and `externalId` when you do not have them. A blank string is rejected.
+
+Omit `source` on create to store null. On update, omit it to leave the link alone, or send `null` to clear it. Sending `source` replaces the whole object.
+
+For Gmail, `href` is the thread URL from the Gmail address bar: `https://mail.google.com/mail/u/0/#all/<threadId>`. Use `/u/1/` (or the matching index) when that mailbox is not the first signed-in account. `#inbox/<threadId>` works the same way. Put the Gmail API message id or the thread id in `externalId` so a bot can find the message again without parsing the URL. `type` stays `email`. Any other page uses `type` `url` and the same `href`.
+
+`create_task` and `update_task` take this same `source`. `list_tasks`, `GET /tasks`, `GET /tasks/do-immediately`, create, update, complete, and the SSE `task` object all include it.
 
 `GET /tasks` query: `teamId`, `action`, `status` (`open` or `done`), `important`, `urgent`, `owner` (`user:<uuid>` or `bot:<uuid>`), `dueBefore`, `project`, `mine`. `lane` is rejected. Humans who omit `teamId` get every team they belong to. A bot who omits `teamId` is limited to its token's team. Passing another team returns 403.
 
@@ -242,7 +262,7 @@ The first message is `event: ready` with `{"teamId":"…"}` and `retry: 3000`. E
 }
 ```
 
-`at` is that write's `updatedAt`. `task` is the same object `GET /tasks` returns, so a bot can apply it without a second request. The stream is live only: there is no backlog, and `Last-Event-ID` is not replayed. An idempotent replay of `POST /tasks` does not send another `created`. Tasks are not deleted, so there is no `deleted` event.
+`at` is that write's `updatedAt`. `task` is the same object `GET /tasks` returns, including `source`, so a bot can apply it without a second request. The stream is live only: there is no backlog, and `Last-Event-ID` is not replayed. An idempotent replay of `POST /tasks` does not send another `created`. Tasks are not deleted, so there is no `deleted` event.
 
 Lines that start with `:` are keepalives, about every 20 seconds. They are not task changes. Access is checked when the stream opens and again on each keepalive.
 
@@ -258,7 +278,7 @@ The web nginx proxy turns off response buffering for `/api/` and waits up to 15 
 
 The API serves a stateless MCP endpoint at `POST /mcp` (Streamable HTTP, JSON responses, no SSE stream). Other methods get 405. Auth is the bot Bearer token, the same `Authorization: Bearer hth_…` header as the REST API. A session cookie is not accepted here.
 
-Tools call the task routes above: `create_task` (pass `idempotencyKey`; it is sent as `Idempotency-Key`; `owner` can be a registered bot), `update_task`, `complete_task`, `list_tasks`, and `list_do_immediately`. List filters match `GET /tasks`. `register_bot`, `list_bots`, and `unregister_bot` manage bot owners. Omit `teamId` on those when the token belongs to one team.
+Tools call the task routes above: `create_task` (pass `idempotencyKey`; it is sent as `Idempotency-Key`; `owner` can be a registered bot; `source` is the email or URL link), `update_task` (`source: null` clears the link), `complete_task`, `list_tasks`, and `list_do_immediately`. List filters match `GET /tasks`. Returned tasks include `source`. `register_bot`, `list_bots`, and `unregister_bot` manage bot owners. Omit `teamId` on those when the token belongs to one team.
 
 `POST /mcp` does not stream task changes. The server instructions and the `hearth://task-events` resource point at `GET /teams/:id/events`. See Live task events above.
 
@@ -302,4 +322,4 @@ Schema changes need a new SQL file under `apps/api/drizzle` and a matching entry
 
 ## Not in v1
 
-Attachments, email links, live Google Calendar create/sync, a Project entity, outbound webhooks, and native apps. A task can store a calendar event id. Railway config is in the repo; this repo does not create or deploy the Railway project.
+File attachments, live Google Calendar create/sync, a Project entity, outbound webhooks, and native apps. A task can store a calendar event id and a source link (email or any http(s) URL). Railway config is in the repo; this repo does not create or deploy the Railway project.

@@ -13,6 +13,7 @@ import {
   createTaskSchema,
   followUpFrom,
   inMorningQueue,
+  isHttpUrl,
   resolveNeedsCalendar,
   suggestAction,
   updateTaskSchema,
@@ -112,6 +113,51 @@ function checkMorningQueue() {
   );
 }
 
+function checkSource() {
+  const href = "https://mail.google.com/mail/u/0/#all/18f2c4e8a1b2c3d4";
+  assert(isHttpUrl(href), "a Gmail deep link is an http(s) URL");
+  assert(!isHttpUrl("javascript:alert(1)"), "a script URL is not a source link");
+  assert(!isHttpUrl("ftp://example.com/file"), "ftp is not a source link");
+
+  const gmail = { type: "email" as const, href, label: "Re: oat milk", externalId: "18f2c4e8a1b2c3d4" };
+  const parsed = createTaskSchema.parse({ teamId, title: "Buy oat milk", source: gmail });
+  assert(parsed.source?.type === "email" && parsed.source.href === href, "create accepts an email source");
+  assert(parsed.source?.label === "Re: oat milk" && parsed.source.externalId === gmail.externalId, "label and externalId round-trip");
+  const trimmed = createTaskSchema.parse({
+    teamId,
+    title: "Buy oat milk",
+    source: { type: "email", href: `  ${href}  `, label: "  Re: oat milk  " },
+  });
+  assert(trimmed.source?.href === href && trimmed.source.label === "Re: oat milk", "source trims href and label");
+  assert(createTaskSchema.parse({ teamId, title: "Buy oat milk" }).source === undefined, "omitted source stays omitted");
+  assert(updateTaskSchema.parse({ source: null }).source === null, "null clears source");
+  const page = createTaskSchema.parse({ teamId, title: "Read", source: { type: "url", href: "https://example.com/notes" } });
+  assert(page.source?.type === "url" && page.source.externalId === undefined, "a url source can be just type and href");
+  assert(
+    !createTaskSchema.safeParse({ teamId, title: "x", source: { type: "email", href: "javascript:alert(1)" } }).success,
+    "javascript href rejected",
+  );
+  assert(
+    !createTaskSchema.safeParse({ teamId, title: "x", source: { type: "file", href: "https://example.com" } }).success,
+    "unknown source type rejected",
+  );
+  assert(
+    !createTaskSchema.safeParse({ teamId, title: "x", source: { type: "url", href: "https://example.com", note: "nope" } }).success,
+    "extra source keys rejected",
+  );
+  assert(!createTaskSchema.safeParse({ teamId, title: "x", source: href }).success, "source is not a string");
+  assert(
+    !createTaskSchema.safeParse({ teamId, title: "x", source: { type: "url", href: "https://example.com", label: "   " } }).success,
+    "a blank label is rejected",
+  );
+
+  const sqlText = readFileSync(new URL("../apps/api/drizzle/0004_source.sql", import.meta.url), "utf8");
+  assert(sqlText.includes('"source" jsonb'), "source column is jsonb");
+  assert(sqlText.includes("tasks_source_chk"), "source check constraint is named");
+  const journal = readFileSync(new URL("../apps/api/drizzle/meta/_journal.json", import.meta.url), "utf8");
+  assert(journal.includes("0004_source"), "journal lists the source migration");
+}
+
 function checkMigrationSql() {
   const sqlText = readFileSync(new URL("../apps/api/drizzle/0001_action.sql", import.meta.url), "utf8");
   const compact = sqlText.replace(/\s+/g, " ");
@@ -137,6 +183,7 @@ try {
   checkNeedsCalendar();
   checkFollowUp();
   checkMorningQueue();
+  checkSource();
   checkMigrationSql();
   console.log("action rules passed");
 } catch (error) {

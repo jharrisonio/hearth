@@ -1,4 +1,15 @@
-import { actions, suggestAction, type Action, type BotSummary, type BotTokenSummary, type Member, type Task } from "@hearth/shared";
+import {
+  actions,
+  isHttpUrl,
+  suggestAction,
+  type Action,
+  type BotSummary,
+  type BotTokenSummary,
+  type Member,
+  type SourceType,
+  type Task,
+  type TaskSource,
+} from "@hearth/shared";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -74,6 +85,9 @@ function TaskForm({
   const [waitingOn, setWaitingOn] = useState(task?.waitingOn ?? "");
   const [calendarEventId, setCalendarEventId] = useState(task?.calendarEventId ?? "");
   const [project, setProject] = useState(task?.project ?? "");
+  const [sourceType, setSourceType] = useState<SourceType | "">(task?.source?.type ?? "");
+  const [sourceHref, setSourceHref] = useState(task?.source?.href ?? "");
+  const [sourceLabel, setSourceLabel] = useState(task?.source?.label ?? "");
   const [dueAt, setDueAt] = useState(toLocalInput(task?.dueAt ?? null));
   const [important, setImportant] = useState(seeded.important);
   const [urgent, setUrgent] = useState(seeded.urgent);
@@ -127,6 +141,8 @@ function TaskForm({
       setError("Choose an owner.");
       return;
     }
+    const source = sourceFromForm();
+    if (source === "invalid") return;
     setSaving(true);
     setError(null);
     const body = {
@@ -136,6 +152,7 @@ function TaskForm({
       waitingOn: action === "delegate" ? waitingOn.trim() : null,
       ...(action === "schedule" ? { calendarEventId: calendarEventId.trim() || null } : {}),
       project: project.trim() || null,
+      source,
       dueAt: action === "delegate" && !task && !dueAt ? undefined : fromLocalInput(dueAt),
       important,
       urgent,
@@ -152,6 +169,30 @@ function TaskForm({
       setSaving(false);
     }
   }
+
+  function sourceFromForm(): TaskSource | null | "invalid" {
+    const href = sourceHref.trim();
+    const label = sourceLabel.trim();
+    if (!sourceType && !href && !label) return null;
+    if (sourceType !== "email" && sourceType !== "url") {
+      setError("Choose email or link for the source.");
+      return "invalid";
+    }
+    if (!isHttpUrl(href)) {
+      setError("Source needs an http(s) link.");
+      return "invalid";
+    }
+    const externalId =
+      task?.source && task.source.type === sourceType && task.source.href === href ? task.source.externalId : undefined;
+    return {
+      type: sourceType,
+      href,
+      ...(label ? { label } : {}),
+      ...(externalId ? { externalId } : {}),
+    };
+  }
+
+  const previewHref = isHttpUrl(sourceHref.trim()) ? sourceHref.trim() : null;
 
   return (
     <form onSubmit={(event) => void onSubmit(event)}>
@@ -265,6 +306,60 @@ function TaskForm({
         Detail
         <textarea className={cn(fieldClass, "resize-y")} rows={3} value={detail} onChange={(event) => setDetail(event.target.value)} />
       </label>
+      <label className={labelClass}>
+        Source
+        <select
+          className={fieldClass}
+          value={sourceType}
+          onChange={(event) => {
+            const next = event.target.value as SourceType | "";
+            setSourceType(next);
+            if (!next) {
+              setSourceHref("");
+              setSourceLabel("");
+            }
+          }}
+        >
+          <option value="">None</option>
+          <option value="email">Email</option>
+          <option value="url">Link</option>
+        </select>
+      </label>
+      {sourceType ? (
+        <>
+          {previewHref ? (
+            <a
+              href={previewHref}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="mt-3 inline-block max-w-full truncate text-[15px] font-light normal-case tracking-normal text-[#eee] underline decoration-[#333] underline-offset-[5px] hover:decoration-white"
+            >
+              {sourceLabel.trim() || (sourceType === "email" ? "Open email" : "Open link")}
+            </a>
+          ) : null}
+          <label className={labelClass}>
+            Link
+            <input
+              className={fieldClass}
+              type="url"
+              inputMode="url"
+              autoComplete="off"
+              placeholder={sourceType === "email" ? "https://mail.google.com/mail/u/0/#all/…" : "https://"}
+              value={sourceHref}
+              onChange={(event) => setSourceHref(event.target.value)}
+            />
+          </label>
+          <label className={labelClass}>
+            Label
+            <input
+              className={fieldClass}
+              value={sourceLabel}
+              placeholder={sourceType === "email" ? "Subject" : "Name"}
+              onChange={(event) => setSourceLabel(event.target.value)}
+            />
+          </label>
+        </>
+      ) : null}
       {task?.status === "done" && task.outcome ? <p className="mt-6 text-[13px] text-white/60">Outcome: {task.outcome}</p> : null}
       {error ? <p className="mt-4 text-[13px] text-[#c9a35a]">{error}</p> : null}
       <div className="mt-16 flex items-center justify-end gap-7">

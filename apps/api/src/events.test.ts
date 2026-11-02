@@ -121,12 +121,22 @@ describe("task events", { concurrency: 1 }, () => {
     const stream = await openEvents(fixture.secret, fixture.team.id);
     try {
       await stream.readUntil((text) => text.includes("event: ready"));
-      const created = await postTask(fixture.secret, { teamId: fixture.team.id, title: "Bins" }, "bins-1");
+      const created = await postTask(
+        fixture.secret,
+        { teamId: fixture.team.id, title: "Bins", source: gmailSource },
+        "bins-1",
+      );
       assert.equal(created.status, 201);
       const id = taskBody(created.json).id;
       await stream.readUntil((text) => taskEvents(text).some((event) => event.taskId === id && event.type === "created"));
+      const createdEvent = taskEvents(stream.text()).find((event) => event.taskId === id && event.type === "created");
+      assert.deepEqual(createdEvent?.task.source, gmailSource);
 
-      const replay = await postTask(fixture.secret, { teamId: fixture.team.id, title: "Bins" }, "bins-1");
+      const replay = await postTask(
+        fixture.secret,
+        { teamId: fixture.team.id, title: "Bins", source: gmailSource },
+        "bins-1",
+      );
       assert.equal(replay.status, 200);
       assert.equal(replay.replayed, "true");
       await idle(150);
@@ -135,6 +145,8 @@ describe("task events", { concurrency: 1 }, () => {
       const patched = await call(fixture.secret, "PATCH", `/tasks/${id}`, { title: "Bins tonight" });
       assert.equal(patched.status, 200);
       await stream.readUntil((text) => taskEvents(text).some((event) => event.type === "updated" && event.task.title === "Bins tonight"));
+      const updatedEvent = taskEvents(stream.text()).find((event) => event.type === "updated");
+      assert.deepEqual(updatedEvent?.task.source, gmailSource);
 
       const done = await call(fixture.secret, "POST", `/tasks/${id}/complete`, { outcome: "Out front" });
       assert.equal(done.status, 200);
@@ -143,6 +155,7 @@ describe("task events", { concurrency: 1 }, () => {
       assert.ok(completed);
       assert.equal(completed.task.status, "done");
       assert.equal(completed.task.outcome, "Out front");
+      assert.deepEqual(completed.task.source, gmailSource);
       assert.equal(completed.at, completed.task.updatedAt);
 
       const again = await call(fixture.secret, "POST", `/tasks/${id}/complete`, { outcome: "Again" });
@@ -429,12 +442,26 @@ function rpcResult(json: unknown) {
   return result;
 }
 
+const gmailSource = {
+  type: "email",
+  href: "https://mail.google.com/mail/u/0/#all/18f2c4e8a1b2c3d4",
+  label: "Bins",
+  externalId: "18f2c4e8a1b2c3d4",
+};
+
 type TaskEventBody = {
   type: string;
   teamId: string;
   taskId: string;
   at: string;
-  task: { id: string; title: string; status: string; updatedAt: string; outcome: string | null };
+  task: {
+    id: string;
+    title: string;
+    status: string;
+    updatedAt: string;
+    outcome: string | null;
+    source: typeof gmailSource | null;
+  };
 };
 
 function parseEvents(text: string) {

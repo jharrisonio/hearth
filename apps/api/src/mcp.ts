@@ -41,7 +41,7 @@ export async function handleMcp(c: Context, app: FetchApp): Promise<Response> {
     { name: "hearth", version: SERVER_VERSION },
     {
       instructions:
-        "Hearth tasks for the team this bot token belongs to. Pass idempotencyKey on create_task when a retry must return the original task instead of a duplicate. The key lasts 24 hours for this bot. Register Fin, Rally, and other agents with register_bot (agent id and display name, no extra token) and set owner to that bot id. Live edits are not pushed over MCP. Subscribe with GET /teams/:teamId/events (text/event-stream, same Bearer token). Read the hearth://task-events resource for the exact URL and the event shape.",
+        "Hearth tasks for the team this bot token belongs to. Pass idempotencyKey on create_task when a retry must return the original task instead of a duplicate. The key lasts 24 hours for this bot. Register Fin, Rally, and other agents with register_bot (agent id and display name, no extra token) and set owner to that bot id. Set source to { type: \"email\" | \"url\", href, label?, externalId? } to link the originating email or page. For Gmail, href is https://mail.google.com/mail/u/0/#all/<threadId> and externalId is the message or thread id. Pass source: null on update_task to clear it. Live edits are not pushed over MCP. Subscribe with GET /teams/:teamId/events (text/event-stream, same Bearer token). Read the hearth://task-events resource for the exact URL and the event shape.",
     },
   );
   registerTaskTools(server, app, authorization ?? "");
@@ -92,7 +92,7 @@ async function taskEventsText(app: FetchApp, authorization: string) {
     "Send the same Authorization: Bearer token and Accept: text/event-stream.",
     urls,
     "Through the web origin, prefix the path with /api.",
-    "The event name is created, updated, or completed. data is JSON with type, teamId, taskId, at, and task (the same task object as GET /tasks).",
+    "The event name is created, updated, or completed. data is JSON with type, teamId, taskId, at, and task (the same task object as GET /tasks, including source).",
     "event ready means the subscription is on. Lines starting with ':' are keepalives. event reconnect means open the URL again and refetch with list_tasks.",
     "There is no backlog. An idempotent replay does not emit another created event. Tasks are not deleted.",
   ].join("\n");
@@ -103,7 +103,7 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "create_task",
     {
       description:
-        "Create a task (POST /tasks). idempotencyKey is sent as the Idempotency-Key header. The same key and body, for this bot, returns the original task for 24 hours. A different body with that key is rejected. owner, when type bot, must be a bot registered on the team (or an existing token id).",
+        "Create a task (POST /tasks). idempotencyKey is sent as the Idempotency-Key header. The same key and body, for this bot, returns the original task for 24 hours. A different body with that key is rejected. owner, when type bot, must be a bot registered on the team (or an existing token id). source, when set, is { type: \"email\" | \"url\", href, label?, externalId? }. href is an http(s) URL. For Gmail, type is email and href is the mail.google.com deep link.",
       inputSchema: createTaskToolSchema,
     },
     async ({ idempotencyKey, ...body }) => {
@@ -122,7 +122,7 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "update_task",
     {
       description:
-        "Update a task (PATCH /tasks/:id). Status cannot be changed here. Complete the task with complete_task. owner, when type bot, must be a bot registered on the team (or an existing token id).",
+        "Update a task (PATCH /tasks/:id). Status cannot be changed here. Complete the task with complete_task. owner, when type bot, must be a bot registered on the team (or an existing token id). source replaces the link; null clears it. Omit source to leave the link unchanged.",
       inputSchema: updateTaskToolSchema,
     },
     async ({ id, ...patch }) => {
@@ -153,7 +153,7 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "list_tasks",
     {
       description:
-        "List tasks (GET /tasks). Filters: teamId, action (do_now, delegate, schedule, later), status (open or done), important, urgent, owner (user:<uuid> or bot:<uuid>), dueBefore, project, mine. Omit teamId to use this bot's team.",
+        "List tasks (GET /tasks). Each task includes source (an email or url link, or null). Filters: teamId, action (do_now, delegate, schedule, later), status (open or done), important, urgent, owner (user:<uuid> or bot:<uuid>), dueBefore, project, mine. Omit teamId to use this bot's team.",
       inputSchema: listTasksQuerySchema,
     },
     async (query) => asTool(await callApi(app, authorization, `${httpOperations.listTasks.path}${queryString(query)}`)),

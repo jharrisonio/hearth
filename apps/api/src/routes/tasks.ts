@@ -192,6 +192,7 @@ taskRoutes.patch("/:id", async (c) => {
       calendarEventId,
       needsCalendar,
       project: body.project !== undefined ? blankToNull(body.project) ?? null : existing.project,
+      source: body.source !== undefined ? body.source : existing.source,
       dueAt: body.dueAt !== undefined ? parseDue(body.dueAt) : existing.dueAt,
       updatedAt: new Date(),
     })
@@ -260,6 +261,7 @@ function taskInsertValues(actor: Actor, body: CreateTaskInput, now: Date) {
       calendarEventId,
       needsCalendar,
       project: blankToNull(body.project) ?? null,
+      source: body.source ?? null,
       dueAt,
       createdAt: now,
       updatedAt: now,

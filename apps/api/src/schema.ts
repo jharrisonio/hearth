@@ -1,4 +1,5 @@
-import { boolean, index, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
+import type { TaskSource } from "@hearth/shared";
+import { boolean, index, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 
 export const teamKind = pgEnum("team_kind", ["personal", "household"]);
 export const membershipRole = pgEnum("membership_role", ["owner", "member"]);
@@ -93,6 +94,8 @@ export const tasks = pgTable(
     calendarEventId: text("calendar_event_id"),
     needsCalendar: boolean("needs_calendar").notNull().default(false),
     project: text("project"),
+    /** Email or page this task came from. Null when the task has no link. */
+    source: jsonb("source").$type<TaskSource | null>(),
     dueAt: timestamp("due_at", { withTimezone: true }),
     outcome: text("outcome"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
