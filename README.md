@@ -61,8 +61,9 @@ That script signs in as both seeded people, checks Naomi cannot read James's per
 | `PORT` | Port the process listens on. The API defaults to `43124` locally and `3001` inside Compose. Railway sets this |
 | `CORS_ORIGINS` | Optional comma-separated browser origins allowed to call the API directly. Leave empty when the web app proxies `/api` (Compose and the Railway web service). No wildcard |
 | `DATABASE_SSL` | Set to `1` to force TLS to Postgres. Also enabled when `DATABASE_URL` contains `sslmode=require` |
-| `API_UPSTREAM` | Web only. Full API URL. Compose sets `http://api:3001`. Leave empty on Railway |
+| `API_UPSTREAM` | Web only. API origin, `http://host:port`. Compose sets `http://api:3001`. Leave empty on Railway. The hostname is resolved per request, not at nginx start |
 | `API_HOST` / `API_PORT` | Web only. Used when `API_UPSTREAM` is empty. Railway wires these to the API private network |
+| `NGINX_RESOLVER` | Web only. DNS server nginx uses to re-resolve the API host. Defaults to the nameserver in the container's `/etc/resolv.conf` |
 
 Copy `.env.example` for host-side `pnpm dev`. Compose sets the variables itself. Production values stay in the host, not in git.
 
@@ -72,7 +73,7 @@ Copy `.env.example` for host-side `pnpm dev`. Compose sets the variables itself.
 
 - `postgres` — Railway Postgres. The API takes `DATABASE_URL` from it.
 - `api` — image from `/apps/api/Dockerfile`.
-- `web` — image from `/apps/web/Dockerfile`. Nginx listens on `PORT` and proxies `/api` to the API over the private network, so the session cookie stays on the web origin.
+- `web` — image from `/apps/web/Dockerfile`. Nginx listens on `PORT` and proxies `/api` to the API over the private network, so the session cookie stays on the web origin. The API hostname is resolved on each request (`resolver` and a variable `proxy_pass`). A Railway redeploy can change the API’s private IP; web keeps working without a restart.
 
 Both services use the repository root as their root directory. Do not set the root to `apps/api` or `apps/web`: the Dockerfiles copy the pnpm workspace from the root. `RAILWAY_DOCKERFILE_PATH` selects the Dockerfile.
 

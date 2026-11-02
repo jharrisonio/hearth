@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { ApiError, api } from "@/lib/api";
+import { fieldClass } from "@/lib/field";
 
 export function CompleteDialog({
   task,
@@ -48,22 +49,15 @@ function CompleteForm({ task, onClose, onSaved }: { task: Task; onClose: () => v
 
   return (
     <form onSubmit={(event) => void onSubmit(event)}>
-      <DialogTitle>Mark done</DialogTitle>
+      <DialogTitle>Done</DialogTitle>
       <DialogDescription>{task.title}</DialogDescription>
-      <label className="mt-4 block text-sm">
-        What was the outcome?
-        <textarea
-          className="mt-1 w-full rounded-xl border border-line bg-white/70 px-3 py-2 text-sm outline-none focus:border-teal"
-          rows={4}
-          value={outcome}
-          onChange={(event) => setOutcome(event.target.value)}
-          autoFocus
-          required
-        />
+      <label className="mt-6 block text-[11px] uppercase tracking-[0.16em] text-white/45">
+        Outcome
+        <textarea className={fieldClass} rows={3} value={outcome} onChange={(event) => setOutcome(event.target.value)} autoFocus required />
       </label>
-      {error ? <p className="mt-3 text-sm text-terracotta">{error}</p> : null}
-      <div className="mt-5 flex justify-end gap-2">
-        <Button type="button" variant="secondary" onClick={onClose}>
+      {error ? <p className="mt-4 text-[13px] text-white/70">{error}</p> : null}
+      <div className="mt-8 flex justify-end gap-5">
+        <Button type="button" variant="ghost" onClick={onClose}>
           Cancel
         </Button>
         <Button type="submit" disabled={saving}>

@@ -18,6 +18,14 @@ export function App() {
         }
       />
       <Route
+        path="/settings"
+        element={
+          <RequireAuth>
+            <Settings />
+          </RequireAuth>
+        }
+      />
+      <Route
         path="/teams/:teamId"
         element={
           <RequireAuth>
@@ -32,9 +40,7 @@ export function App() {
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
-  if (loading) {
-    return <p className="px-5 py-16 text-center text-muted">Loading your lists…</p>;
-  }
+  if (loading) return <div className="min-h-dvh bg-black" />;
   if (!user) return <Navigate to="/signin" replace />;
   return children;
 }

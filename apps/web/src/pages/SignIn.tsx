@@ -2,11 +2,10 @@ import type { AuthConfig } from "@hearth/shared";
 import { useEffect, useState } from "react";
 import { Navigate, useSearchParams } from "react-router";
 import { useAuth } from "@/auth";
-import { Button } from "@/components/ui/button";
 import { ApiError, api } from "@/lib/api";
 
 const errors: Record<string, string> = {
-  google_not_configured: "Google sign-in isn't configured. Use a dev sign-in, or set the Google client id and secret.",
+  google_not_configured: "Google sign-in isn't configured.",
   google: "Google sign-in didn't complete. Try again.",
   state: "That sign-in attempt expired. Try again.",
 };
@@ -22,7 +21,7 @@ export function SignIn() {
     void api
       .config()
       .then(setConfig)
-      .catch(() => setError("Hearth can't reach the server. Check that the API is running."));
+      .catch(() => setError("Hearth can't reach the server."));
   }, []);
 
   if (!loading && user) return <Navigate to="/" replace />;
@@ -41,44 +40,31 @@ export function SignIn() {
   }
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-lg flex-col justify-center px-5 py-12">
-      <p className="text-xs uppercase tracking-[0.22em] text-muted">Household lists</p>
-      <h1 className="mt-2 font-serif text-5xl font-medium tracking-tight">Hearth</h1>
-      <p className="mt-3 text-lg text-ink/80">
-        The shared list for the people who live here, and the bots that help them.
-      </p>
-      <section className="mt-8 rounded-3xl border border-line bg-sheet p-5 shadow-sm">
+    <div className="flex min-h-dvh flex-col bg-black text-white">
+      <main className="flex flex-1 flex-col items-center justify-center gap-7 px-8 text-center">
         {config?.google ? (
-          <Button className="w-full" onClick={() => (window.location.href = "/api/auth/google")}>
+          <button type="button" className="text-[15px] hover:underline" onClick={() => (window.location.href = "/api/auth/google")}>
             Continue with Google
-          </Button>
-        ) : (
-          <p className="text-sm text-muted">
-            Google sign-in is off until <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> are set.
-          </p>
-        )}
-        {config?.devAuth ? (
-          <div className="mt-5 border-t border-line pt-5">
-            <p className="text-xs uppercase tracking-[0.16em] text-muted">On this machine</p>
-            <div className="mt-3 grid gap-2">
-              {(config.devUsers ?? []).map((devUser) => (
-                <Button
-                  key={devUser.email}
-                  variant="secondary"
-                  className="w-full justify-between"
-                  disabled={pending != null}
-                  onClick={() => void signIn(devUser.email)}
-                >
-                  <span>Sign in as {devUser.name}</span>
-                  <span className="text-xs text-muted">{devUser.email}</span>
-                </Button>
-              ))}
-              {config.devUsers?.length === 0 ? <p className="text-sm text-muted">No seeded users yet.</p> : null}
-            </div>
-          </div>
+          </button>
+        ) : config ? (
+          <p className="text-[13px] text-white/35">Google sign-in is off.</p>
         ) : null}
-        {error ? <p className="mt-4 text-sm text-terracotta">{error}</p> : null}
-      </section>
-    </main>
+        {config?.devAuth
+          ? (config.devUsers ?? []).map((devUser) => (
+              <button
+                key={devUser.email}
+                type="button"
+                className="text-[15px] hover:underline disabled:opacity-40"
+                disabled={pending != null}
+                onClick={() => void signIn(devUser.email)}
+              >
+                {pending === devUser.email ? "Signing in…" : `Sign in as ${devUser.name}`}
+              </button>
+            ))
+          : null}
+        {config?.devAuth && config.devUsers?.length === 0 ? <p className="text-[13px] text-white/35">No seeded users yet.</p> : null}
+        {error ? <p className="max-w-sm text-[13px] text-white/60">{error}</p> : null}
+      </main>
+    </div>
   );
 }
