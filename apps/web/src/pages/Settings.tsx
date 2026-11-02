@@ -181,7 +181,7 @@ export function Settings() {
       </Link>
       <main className="hearth-sheet mx-auto min-h-dvh w-full max-w-[560px] px-7 pb-20 pt-[92px]">
         <h1 className={pageTitleClass}>Settings</h1>
-        {loading ? <p className="text-[10px] uppercase tracking-[0.4em] text-[#4a4a4a]">Loading</p> : null}
+        {loading ? <p className="text-[10px] uppercase tracking-[0.4em] text-[#a8a8a8]">Loading</p> : null}
         {error ? <p className="mb-6 text-[13px] text-[#c9a35a]">{error}</p> : null}
         {notice ? <p className="mb-6 text-[13px] text-[#cfcfcf]">{notice}</p> : null}
 
@@ -194,10 +194,10 @@ export function Settings() {
           </div>
           {config?.google ? (
             <div className="flex items-baseline justify-between gap-4 border-b border-[#1c1c1c] py-3.5 text-[14px]">
-              <span className="text-[#8a8a8a]">Google</span>
+              <span className="text-[#a8a8a8]">Google</span>
               <button
                 type="button"
-                className="text-[10px] font-normal uppercase tracking-[0.32em] text-[#8a8a8a] hover:text-white"
+                className="text-[10px] font-normal uppercase tracking-[0.32em] text-[#a8a8a8] hover:text-white"
                 onClick={() => {
                   window.location.href = "/api/auth/google";
                 }}
@@ -207,13 +207,13 @@ export function Settings() {
             </div>
           ) : (
             <div className="flex items-baseline justify-between gap-4 border-b border-[#1c1c1c] py-3.5 text-[14px]">
-              <span className="text-[#8a8a8a]">Google sign-in</span>
-              <span className="text-[13px] text-[#666]">Off</span>
+              <span className="text-[#a8a8a8]">Google sign-in</span>
+              <span className="text-[13px] text-[#a8a8a8]">Off</span>
             </div>
           )}
           <button
             type="button"
-            className="mt-6 text-[10px] font-normal uppercase tracking-[0.32em] text-[#8a8a8a] hover:text-white"
+            className="mt-6 text-[10px] font-normal uppercase tracking-[0.32em] text-[#a8a8a8] hover:text-white"
             onClick={() => void signOut()}
           >
             Sign out
@@ -234,7 +234,7 @@ export function Settings() {
                       {current ? <span className="mr-2 text-[8px] text-[#9c9]">●</span> : null}
                       {item.name}
                     </span>
-                    <span className="shrink-0 text-[12px] text-[#666]">{item.kind}</span>
+                    <span className="shrink-0 text-[12px] text-[#a8a8a8]">{item.kind}</span>
                   </button>
                 </li>
               );
@@ -257,12 +257,12 @@ export function Settings() {
         {team ? (
           <section className="mt-[72px]">
             <h2 className={sectionClass}>This list — {team.name}</h2>
-            <p className="mt-4 text-[12px] font-light text-[#666]">
+            <p className="mt-4 text-[12px] font-light text-[#a8a8a8]">
               {team.kind === "personal" ? "Personal" : "Household"} / {team.role === "owner" ? "Owner" : "Member"}
             </p>
 
             <h3 className={subheadClass}>Members</h3>
-            <p className="mb-2 text-[13px] font-light text-[#5c5c5c]">
+            <p className="mb-2 text-[13px] font-light text-[#a8a8a8]">
               {team.kind === "personal"
                 ? "A personal list stays with you. Bots you grant can still post here."
                 : "Members can see and update household tasks. Only an owner can invite or mint tokens."}
@@ -274,9 +274,9 @@ export function Settings() {
                   className="flex items-baseline justify-between gap-4 border-b border-[#1c1c1c] py-3.5 text-[14px] font-light"
                 >
                   <span className="min-w-0">
-                    {member.name} <span className="text-[#666]">{member.email}</span>
+                    {member.name} <span className="text-[#a8a8a8]">{member.email}</span>
                   </span>
-                  <span className="shrink-0 text-[12px] text-[#666]">{member.role}</span>
+                  <span className="shrink-0 text-[12px] text-[#a8a8a8]">{member.role}</span>
                 </li>
               ))}
             </ul>
@@ -317,18 +317,18 @@ export function Settings() {
             />
 
             <h3 className={subheadClass}>Bots</h3>
-            <p className="mb-2 text-[13px] font-light text-[#5c5c5c]">
+            <p className="mb-2 text-[13px] font-light text-[#a8a8a8]">
               A registered bot is a name you can put on a task. It does not get a secret. One team token can post for all of them.
             </p>
             <ul>
-              {bots.length === 0 ? <li className="py-3.5 text-[13px] text-[#666]">No bots registered yet.</li> : null}
+              {bots.length === 0 ? <li className="py-3.5 text-[13px] text-[#a8a8a8]">No bots registered yet.</li> : null}
               {bots.map((bot) => (
                 <li
                   key={bot.id}
                   className="flex flex-wrap items-baseline justify-between gap-3 border-b border-[#1c1c1c] py-3.5 text-[14px] font-light"
                 >
                   <span>
-                    {bot.name} <span className="text-[12px] text-[#666]">{bot.agentId}</span>
+                    {bot.name} <span className="text-[12px] text-[#a8a8a8]">{bot.agentId}</span>
                   </span>
                   {confirmUnregister === bot.id ? (
                     <span className="flex gap-4">
@@ -360,7 +360,7 @@ export function Settings() {
             </form>
 
             <h3 className={subheadClass}>Bot tokens</h3>
-            <p className="text-[13px] font-light text-[#5c5c5c]">
+            <p className="text-[13px] font-light text-[#a8a8a8]">
               A token is a credential for this team, separate from a registered bot. Send it as{" "}
               <code>Authorization: Bearer …</code>. The secret is shown once.
             </p>
@@ -370,7 +370,7 @@ export function Settings() {
                 <pre className="mt-2 overflow-x-auto text-[12px] text-white">{secret}</pre>
                 <button
                   type="button"
-                  className="mt-3 text-[10px] font-normal uppercase tracking-[0.32em] text-[#8a8a8a] hover:text-white"
+                  className="mt-3 text-[10px] font-normal uppercase tracking-[0.32em] text-[#a8a8a8] hover:text-white"
                   onClick={() => void navigator.clipboard.writeText(secret)}
                 >
                   Copy
@@ -378,7 +378,7 @@ export function Settings() {
               </div>
             ) : null}
             <ul className="mt-2">
-              {tokens.length === 0 ? <li className="py-3.5 text-[13px] text-[#666]">No tokens.</li> : null}
+              {tokens.length === 0 ? <li className="py-3.5 text-[13px] text-[#a8a8a8]">No tokens.</li> : null}
               {tokens.map((token) => (
                 <li
                   key={token.id}
@@ -386,7 +386,7 @@ export function Settings() {
                 >
                   <span>
                     {token.label}{" "}
-                    <span className="text-[12px] text-[#666]">
+                    <span className="text-[12px] text-[#a8a8a8]">
                       {token.prefix}… {token.revokedAt ? "· revoked" : ""}
                     </span>
                   </span>
@@ -424,7 +424,7 @@ export function Settings() {
                 <Button type="submit">Mint</Button>
               </form>
             ) : (
-              <p className="mt-6 text-[13px] text-[#666]">Ask an owner if you need a new token.</p>
+              <p className="mt-6 text-[13px] text-[#a8a8a8]">Ask an owner if you need a new token.</p>
             )}
           </section>
         ) : null}
@@ -481,15 +481,15 @@ function Catalogue({
   return (
     <>
       <h3 className={subheadClass}>{title}</h3>
-      <p className="mb-2 text-[13px] font-light text-[#5c5c5c]">{hint}</p>
+      <p className="mb-2 text-[13px] font-light text-[#a8a8a8]">{hint}</p>
       <ul>
-        {items.length === 0 ? <li className="py-3.5 text-[13px] text-[#666]">None yet.</li> : null}
+        {items.length === 0 ? <li className="py-3.5 text-[13px] text-[#a8a8a8]">None yet.</li> : null}
         {items.map((item) => (
           <li
             key={item.id}
             className="flex flex-wrap items-baseline justify-between gap-3 border-b border-[#1c1c1c] py-3.5 text-[14px] font-light"
           >
-            <span className={item.archivedAt ? "text-[#666]" : undefined}>
+            <span className={item.archivedAt ? "text-[#a8a8a8]" : undefined}>
               {item.name}
               {item.archivedAt ? " · archived" : ""}
             </span>

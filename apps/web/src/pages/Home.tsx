@@ -120,7 +120,7 @@ export function Home() {
             </span>
             <button
               type="button"
-              className="shrink-0 pl-[0.28em] text-[10px] font-normal uppercase tracking-[0.28em] text-[#8a8a8a] transition-colors duration-150 hover:text-white active:opacity-40 disabled:opacity-40"
+              className="shrink-0 pl-[0.28em] text-[10px] font-normal uppercase tracking-[0.28em] text-[#a8a8a8] transition-colors duration-150 hover:text-white active:opacity-40 disabled:opacity-40"
               onClick={openProjects}
               disabled={!current}
             >
@@ -137,9 +137,9 @@ export function Home() {
 
       <main className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-[560px] px-7 pb-16 pt-[7vh] sm:pt-[9vh]">
-          {loading ? <p className="text-[10px] font-normal uppercase tracking-[0.4em] text-[#4a4a4a]">Loading</p> : null}
+          {loading ? <p className="text-[10px] font-normal uppercase tracking-[0.4em] text-[#a8a8a8]">Loading</p> : null}
           {!loading && error ? (
-            <p className="max-w-sm text-[13px] font-light text-white/60">
+            <p className="max-w-sm text-[13px] font-light text-[#a8a8a8]">
               {error}{" "}
               <button type="button" className="underline underline-offset-4" onClick={() => void reload()}>
                 try again
@@ -147,7 +147,7 @@ export function Home() {
             </p>
           ) : null}
           {!loading && !error && visible.length === 0 ? (
-            <p className="text-[10px] font-normal uppercase tracking-[0.4em] text-[#4a4a4a]">Nothing here</p>
+            <p className="text-[10px] font-normal uppercase tracking-[0.4em] text-[#a8a8a8]">Nothing here</p>
           ) : null}
           {visible.length > 0 ? (
             <ul key={`${current?.id ?? "none"}-${filter}`} className="hearth-fade flex w-full flex-col">
@@ -183,7 +183,7 @@ export function Home() {
                 onClick={() => setFilter(action)}
                 className={cn(
                   "relative px-1 py-3 text-[10px] font-normal uppercase tracking-[0.24em] transition-colors duration-200 sm:tracking-[0.38em]",
-                  filter === action ? "text-white" : "text-[#4a4a4a] hover:text-[#8a8a8a]",
+                  filter === action ? "text-white" : "text-[#a8a8a8] hover:text-white",
                 )}
               >
                 {actionLabel[action]}
@@ -295,7 +295,7 @@ function ListPicker({
                   onClick={() => onChoose(team.id)}
                   className={cn(
                     "py-3.5 text-left text-[24px] font-light transition-colors duration-200",
-                    on ? "text-white" : "text-[#555] hover:text-white",
+                    on ? "text-white" : "text-[#a8a8a8] hover:text-white",
                   )}
                 >
                   {on ? <span className="mr-3.5 inline-block h-px w-[18px] bg-white align-middle" /> : null}
@@ -307,7 +307,7 @@ function ListPicker({
         </ul>
         <button
           type="button"
-          className="mt-10 py-3.5 text-left text-[24px] font-light text-[#555] transition-colors duration-200 hover:text-white disabled:opacity-40"
+          className="mt-10 py-3.5 text-left text-[24px] font-light text-[#a8a8a8] transition-colors duration-200 hover:text-white disabled:opacity-40"
           onClick={onProjects}
           disabled={!currentId}
         >
@@ -315,7 +315,7 @@ function ListPicker({
         </button>
         <button
           type="button"
-          className="mt-8 text-[10px] font-normal uppercase tracking-[0.32em] text-[#8a8a8a] transition-colors duration-150 hover:text-white"
+          className="mt-8 text-[10px] font-normal uppercase tracking-[0.32em] text-[#a8a8a8] transition-colors duration-150 hover:text-white"
           onClick={onCreate}
         >
           New household

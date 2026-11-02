@@ -51,7 +51,7 @@ export function SignIn() {
             Continue with Google
           </button>
         ) : config ? (
-          <p className="text-[13px] text-white/35">Google sign-in is off.</p>
+          <p className="text-[13px] text-[#a8a8a8]">Google sign-in is off.</p>
         ) : null}
         {config?.devAuth
           ? (config.devUsers ?? []).map((devUser) => (
@@ -66,8 +66,8 @@ export function SignIn() {
               </button>
             ))
           : null}
-        {config?.devAuth && config.devUsers?.length === 0 ? <p className="text-[13px] text-white/35">No seeded users yet.</p> : null}
-        {error ? <p className="max-w-sm text-[13px] text-white/60">{error}</p> : null}
+        {config?.devAuth && config.devUsers?.length === 0 ? <p className="text-[13px] text-[#a8a8a8]">No seeded users yet.</p> : null}
+        {error ? <p className="max-w-sm text-[13px] text-[#a8a8a8]">{error}</p> : null}
       </main>
     </div>
   );

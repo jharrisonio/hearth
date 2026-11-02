@@ -43,7 +43,7 @@ function DeleteForm({ task, onClose, onDeleted }: { task: Task; onClose: () => v
     <div>
       <DialogTitle className="mb-3">Delete</DialogTitle>
       <DialogDescription className="text-[15px] text-[#d6d6d6]">{task.title}</DialogDescription>
-      <p className="mt-6 text-[13px] font-light leading-relaxed text-white/60">
+      <p className="mt-6 text-[13px] font-light leading-relaxed text-[#a8a8a8]">
         This removes the task. It does not stay for audit.
       </p>
       {error ? <p className="mt-4 text-[13px] text-[#c9a35a]">{error}</p> : null}

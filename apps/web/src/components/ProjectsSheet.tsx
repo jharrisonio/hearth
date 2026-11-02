@@ -187,12 +187,12 @@ function ProjectsBody({
             setProjectId(null);
             setError(null);
           }}
-          className="mb-8 text-[10px] font-normal uppercase tracking-[0.32em] text-[#8a8a8a] hover:text-white"
+          className="mb-8 text-[10px] font-normal uppercase tracking-[0.32em] text-[#a8a8a8] hover:text-white"
         >
           All projects
         </button>
         <DialogTitle>Project</DialogTitle>
-        {loading || !error ? <p className="text-[10px] uppercase tracking-[0.4em] text-[#4a4a4a]">Loading</p> : null}
+        {loading || !error ? <p className="text-[10px] uppercase tracking-[0.4em] text-[#a8a8a8]">Loading</p> : null}
         {error ? <p className="mt-4 text-[13px] text-[#c9a35a]">{error}</p> : null}
       </>
     );
@@ -204,9 +204,9 @@ function ProjectsBody({
     <>
       <DialogTitle>Projects</DialogTitle>
       <DialogDescription>Open outcomes. Completed projects stay off this list.</DialogDescription>
-      {loading ? <p className="text-[10px] uppercase tracking-[0.4em] text-[#4a4a4a]">Loading</p> : null}
+      {loading ? <p className="text-[10px] uppercase tracking-[0.4em] text-[#a8a8a8]">Loading</p> : null}
       {error ? <p className="mt-4 text-[13px] text-[#c9a35a]">{error}</p> : null}
-      {!loading && visible.length === 0 ? <p className="mt-10 text-[13px] text-[#666]">No projects yet.</p> : null}
+      {!loading && visible.length === 0 ? <p className="mt-10 text-[13px] text-[#a8a8a8]">No projects yet.</p> : null}
       <ul className="mt-6 flex flex-col">
         {visible.map((item) => (
           <li key={item.id}>
@@ -218,11 +218,11 @@ function ProjectsBody({
               }}
               className={cn(
                 "py-3.5 text-left text-[24px] font-light transition-colors duration-200 hover:text-white",
-                item.archivedAt ? "text-[#555]" : "text-[#d6d6d6]",
+                item.archivedAt ? "text-[#a8a8a8]" : "text-[#d6d6d6]",
               )}
             >
               {item.name}
-              {item.archivedAt ? <span className="ml-3 text-[10px] uppercase tracking-[0.28em] text-[#555]">Completed</span> : null}
+              {item.archivedAt ? <span className="ml-3 text-[10px] uppercase tracking-[0.28em] text-[#a8a8a8]">Completed</span> : null}
             </button>
           </li>
         ))}
@@ -230,7 +230,7 @@ function ProjectsBody({
       <div className="mt-16 flex items-center justify-between gap-6">
         <button
           type="button"
-          className="text-[10px] font-normal uppercase tracking-[0.32em] text-[#8a8a8a] transition-colors duration-150 hover:text-white"
+          className="text-[10px] font-normal uppercase tracking-[0.32em] text-[#a8a8a8] transition-colors duration-150 hover:text-white"
           onClick={() => {
             const next = !showArchived;
             setShowArchived(next);
@@ -244,7 +244,7 @@ function ProjectsBody({
         </button>
         <button
           type="button"
-          className="text-[10px] font-normal uppercase tracking-[0.32em] text-[#8a8a8a] transition-colors duration-150 hover:text-white"
+          className="text-[10px] font-normal uppercase tracking-[0.32em] text-[#a8a8a8] transition-colors duration-150 hover:text-white"
           onClick={() => {
             setCreating(true);
             setError(null);
@@ -292,7 +292,7 @@ function CreateProject({
       <button
         type="button"
         onClick={onCancel}
-        className="mb-8 text-[10px] font-normal uppercase tracking-[0.32em] text-[#8a8a8a] hover:text-white"
+        className="mb-8 text-[10px] font-normal uppercase tracking-[0.32em] text-[#a8a8a8] hover:text-white"
       >
         All projects
       </button>
@@ -533,7 +533,7 @@ function ProjectDetail({
       <button
         type="button"
         onClick={onBack}
-        className="mb-8 text-[10px] font-normal uppercase tracking-[0.32em] text-[#8a8a8a] hover:text-white"
+        className="mb-8 text-[10px] font-normal uppercase tracking-[0.32em] text-[#a8a8a8] hover:text-white"
       >
         All projects
       </button>
@@ -632,7 +632,7 @@ function ProjectDetail({
       <div className="mt-16">
         <button
           type="button"
-          className="text-[10px] font-normal uppercase tracking-[0.32em] text-[#8a8a8a] hover:text-white"
+          className="text-[10px] font-normal uppercase tracking-[0.32em] text-[#a8a8a8] hover:text-white"
           onClick={() => void completeProject()}
         >
           {project.archivedAt ? "Restore" : "Complete"}
@@ -664,7 +664,7 @@ function StepList({
   onPark: (task: Task) => void;
   showAction?: boolean;
 }) {
-  if (tasks.length === 0) return <p className="py-3 text-[13px] text-[#666]">{empty}</p>;
+  if (tasks.length === 0) return <p className="py-3 text-[13px] text-[#a8a8a8]">{empty}</p>;
   return (
     <ul>
       {tasks.map((task, index) => (
@@ -674,7 +674,7 @@ function StepList({
               {task.title}
             </span>
             {showAction ? (
-              <span className="mt-1 block text-[10px] font-normal uppercase tracking-[0.28em] text-[#5c5c5c]">
+              <span className="mt-1 block text-[10px] font-normal uppercase tracking-[0.28em] text-[#a8a8a8]">
                 {actionLabel[task.action]}
                 {task.action === "delegate" && task.waitingOn ? ` · ${task.waitingOn}` : ""}
               </span>
@@ -698,16 +698,16 @@ function StepList({
 }
 
 function HistoryList({ tasks, empty, onOpen }: { tasks: Task[]; empty: string; onOpen: (task: Task) => void }) {
-  if (tasks.length === 0) return <p className="py-3 text-[13px] text-[#666]">{empty}</p>;
+  if (tasks.length === 0) return <p className="py-3 text-[13px] text-[#a8a8a8]">{empty}</p>;
   return (
     <ul>
       {tasks.map((task) => (
         <li key={task.id} className="border-b border-[#1c1c1c] py-3">
           <button type="button" onClick={() => onOpen(task)} className="block max-w-full text-left">
-            <span className="block text-[18px] font-light leading-snug text-[#8a8a8a] transition-colors duration-200 hover:text-white">
+            <span className="block text-[18px] font-light leading-snug text-[#a8a8a8] transition-colors duration-200 hover:text-white">
               {task.title}
             </span>
-            {task.outcome ? <span className="mt-1 block text-[13px] font-light text-[#5c5c5c]">{task.outcome}</span> : null}
+            {task.outcome ? <span className="mt-1 block text-[13px] font-light text-[#a8a8a8]">{task.outcome}</span> : null}
           </button>
         </li>
       ))}
@@ -729,7 +729,7 @@ function StepControl({
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className="text-[10px] font-normal uppercase tracking-[0.28em] text-[#8a8a8a] transition-colors duration-150 hover:text-white disabled:text-[#333]"
+      className="text-[10px] font-normal uppercase tracking-[0.28em] text-[#a8a8a8] transition-colors duration-150 hover:text-white disabled:text-[#8a8a8a]"
     >
       {children}
     </button>

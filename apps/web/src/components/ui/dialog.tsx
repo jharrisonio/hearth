@@ -95,5 +95,5 @@ export const DialogTitle = ({ className, ...props }: ComponentProps<typeof Dialo
 );
 
 export const DialogDescription = ({ className, ...props }: ComponentProps<typeof DialogPrimitive.Description>) => (
-  <DialogPrimitive.Description className={cn("mt-3 text-[13px] font-light text-[#5c5c5c]", className)} {...props} />
+  <DialogPrimitive.Description className={cn("mt-3 text-[13px] font-light text-[#a8a8a8]", className)} {...props} />
 );
