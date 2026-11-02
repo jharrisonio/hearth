@@ -1,7 +1,10 @@
 import {
   actions,
+  calendarHref,
   delegateRequiresWaitingOn,
   isHttpUrl,
+  needsCheckIn,
+  scheduleRequiresDueAt,
   suggestAction,
   type Action,
   type AreaSummary,
@@ -348,6 +351,10 @@ function TaskForm({
       setError(draft.sourceNotice ?? "Source needs an http(s) link.");
       return;
     }
+    if (scheduleRequiresDueAt(draft.action, draft.calendarEventId, draft.dueAt)) {
+      setError("Set when. That time is the check-in.");
+      return;
+    }
     setSaving(true);
     setError(null);
     const body = {
@@ -376,6 +383,11 @@ function TaskForm({
   }
 
   const previewHref = isHttpUrl(sourceHref.trim()) ? sourceHref.trim() : null;
+  const calendarLink = action === "schedule" ? calendarHref(calendarEventId) : null;
+  const showCheckIn =
+    task?.status === "open" &&
+    action === "schedule" &&
+    needsCheckIn({ status: "open", action, dueAt: fromLocalInput(dueAt) });
   const saveLabel = saveState === "saving" ? "Saving" : saveState === "saved" ? "Saved" : "";
 
   return (
@@ -458,10 +470,30 @@ function TaskForm({
             <input className={fieldClass} type="datetime-local" value={dueAt} onChange={(event) => setDueAt(event.target.value)} />
           </label>
           <label className={labelClass}>
-            Calendar event
-            <input className={fieldClass} value={calendarEventId} onChange={(event) => setCalendarEventId(event.target.value)} />
+            Calendar
+            <input
+              className={fieldClass}
+              value={calendarEventId}
+              placeholder="Google Calendar link or event id"
+              spellCheck={false}
+              autoCapitalize="off"
+              autoComplete="off"
+              onChange={(event) => setCalendarEventId(event.target.value)}
+            />
           </label>
-          {task?.needsCalendar ? <p className={hintClass}>Needs a calendar.</p> : null}
+          {calendarLink ? (
+            <a
+              href={calendarLink}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="mt-3 inline-block max-w-full truncate text-[15px] font-light normal-case tracking-normal text-[#eee] underline decoration-[#333] underline-offset-[5px] hover:decoration-white"
+            >
+              Open calendar
+            </a>
+          ) : (
+            <p className={hintClass}>Needs a calendar.</p>
+          )}
+          {showCheckIn ? <p className={hintClass}>Check in. Complete, cancel, or set a new time.</p> : null}
         </>
       ) : null}
       <label className={labelClass}>
@@ -712,6 +744,9 @@ function lookAt(saved: Draft, current: Draft): { patch: UpdateTaskInput | null; 
   let notice: string | null = null;
   if (delegateBlocked && (delegateDirty || ownerHeld)) notice = "Say who or what this is waiting on.";
   else if (!current.sourceReady && current.sourceNotice) notice = current.sourceNotice;
+  else if (scheduleRequiresDueAt(current.action, current.calendarEventId, current.dueAt)) {
+    notice = "Set when. That time is the check-in.";
+  }
   return { patch: diffDraft(saved, current), notice, blocked: false };
 }
 
@@ -723,20 +758,22 @@ function diffDraft(saved: Draft, current: Draft): UpdateTaskInput | null {
   if (current.urgent !== saved.urgent) patch.urgent = current.urgent;
   if (current.projectId !== saved.projectId) patch.projectId = current.projectId;
   if (current.areaId !== saved.areaId) patch.areaId = current.areaId;
-  if (current.dueAt !== saved.dueAt) patch.dueAt = current.dueAt;
   const ownerChanged = Boolean(
     current.owner && (!saved.owner || current.owner.type !== saved.owner.type || current.owner.id !== saved.owner.id),
   );
   const delegateBlocked = delegateRequiresWaitingOn(current.action, current.owner) && !current.waitingOn;
+  const nextAction = delegateBlocked ? saved.action : current.action;
+  const nextCalendar = nextAction === "schedule" ? current.calendarEventId : saved.calendarEventId;
+  const holdCalendar = scheduleRequiresDueAt(nextAction, nextCalendar, current.dueAt);
   if (ownerChanged && current.owner && !(delegateBlocked && current.owner.type !== "bot")) {
     patch.owner = current.owner;
   }
-  if (!delegateBlocked && (current.action !== saved.action || current.waitingOn !== saved.waitingOn)) {
+  if (!delegateBlocked && !holdCalendar && (current.action !== saved.action || current.waitingOn !== saved.waitingOn)) {
     patch.action = current.action;
     patch.waitingOn = current.waitingOn;
   }
-  const persistedAction = patch.action ?? (delegateBlocked ? saved.action : current.action);
-  if (persistedAction === "schedule" && current.calendarEventId !== saved.calendarEventId) {
+  if (!holdCalendar && current.dueAt !== saved.dueAt) patch.dueAt = current.dueAt;
+  if (!holdCalendar && nextAction === "schedule" && current.calendarEventId !== saved.calendarEventId) {
     patch.calendarEventId = current.calendarEventId;
   }
   if (current.sourceReady && sourceKey(current.source) !== sourceKey(saved.source)) patch.source = current.source;

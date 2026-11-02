@@ -1,4 +1,5 @@
-import type { Task } from "@hearth/shared";
+import { calendarHref, type Task } from "@hearth/shared";
+import { scheduleListCue } from "@/lib/action";
 
 export function TaskRow({
   task,
@@ -10,6 +11,8 @@ export function TaskRow({
   onOpenProject?: (projectId: string) => void;
 }) {
   const project = task.project;
+  const cue = scheduleListCue(task);
+  const calendarLink = task.action === "schedule" ? calendarHref(task.calendarEventId) : null;
   return (
     <li className="w-fit max-w-full py-[13px]">
       <button
@@ -37,6 +40,22 @@ export function TaskRow({
           ) : null}
           {project && task.area ? " · " : null}
           {task.area?.name}
+        </p>
+      ) : null}
+      {cue || calendarLink ? (
+        <p className="mt-1 text-[10px] font-normal uppercase tracking-[0.28em] text-[#a8a8a8]">
+          {cue}
+          {cue && calendarLink ? " · " : null}
+          {calendarLink ? (
+            <a
+              href={calendarLink}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="underline decoration-[#333] underline-offset-4 transition-colors duration-150 hover:text-white hover:decoration-white"
+            >
+              Calendar
+            </a>
+          ) : null}
         </p>
       ) : null}
     </li>

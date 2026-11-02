@@ -1,8 +1,8 @@
-import { isProjectFront, type AreaSummary, type ProjectSummary, type Task } from "@hearth/shared";
+import { calendarHref, isProjectFront, type AreaSummary, type ProjectSummary, type Task } from "@hearth/shared";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
-import { actionLabel } from "@/lib/action";
+import { actionLabel, scheduleListCue } from "@/lib/action";
 import { ApiError, api } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { fieldClass, hintClass, labelClass, subheadClass } from "@/lib/field";
@@ -667,19 +667,36 @@ function StepList({
   if (tasks.length === 0) return <p className="py-3 text-[13px] text-[#a8a8a8]">{empty}</p>;
   return (
     <ul>
-      {tasks.map((task, index) => (
+      {tasks.map((task, index) => {
+        const cue = scheduleListCue(task);
+        const calendarLink = task.action === "schedule" ? calendarHref(task.calendarEventId) : null;
+        const meta = [
+          showAction ? actionLabel[task.action] : null,
+          showAction && task.action === "delegate" && task.waitingOn ? task.waitingOn : null,
+          cue,
+        ].filter(Boolean);
+        return (
         <li key={task.id} className="border-b border-[#1c1c1c] py-3">
           <button type="button" onClick={() => onOpen(task)} className="block max-w-full text-left">
             <span className="block text-[18px] font-light leading-snug text-[#d6d6d6] transition-colors duration-200 hover:text-white">
               {task.title}
             </span>
-            {showAction ? (
+            {meta.length ? (
               <span className="mt-1 block text-[10px] font-normal uppercase tracking-[0.28em] text-[#a8a8a8]">
-                {actionLabel[task.action]}
-                {task.action === "delegate" && task.waitingOn ? ` · ${task.waitingOn}` : ""}
+                {meta.join(" · ")}
               </span>
             ) : null}
           </button>
+          {calendarLink ? (
+            <a
+              href={calendarLink}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="mt-1 inline-block text-[10px] font-normal uppercase tracking-[0.28em] text-[#a8a8a8] underline decoration-[#333] underline-offset-4 hover:text-white hover:decoration-white"
+            >
+              Calendar
+            </a>
+          ) : null}
           <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1">
             <StepControl disabled={moving || index === 0} onClick={() => onMove(tasks, index, -1)}>
               Up
@@ -692,7 +709,8 @@ function StepList({
             </StepControl>
           </div>
         </li>
-      ))}
+        );
+      })}
     </ul>
   );
 }
