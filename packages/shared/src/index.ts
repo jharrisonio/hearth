@@ -1,17 +1,78 @@
 import { z } from "zod";
 
-/** Locked v1 vocabulary. Eisenhower quadrant is derived, never stored. */
-export const lanes = ["next", "waiting", "someday"] as const;
+/** Stored next step. Important and urgent stay separate and still drive sort order. */
+export const actions = ["do_now", "delegate", "schedule", "later"] as const;
 export const taskStatuses = ["open", "done"] as const;
 export const teamKinds = ["personal", "household"] as const;
 export const membershipRoles = ["owner", "member"] as const;
 export const actorTypes = ["user", "bot"] as const;
 
-export type Lane = (typeof lanes)[number];
+export type Action = (typeof actions)[number];
 export type TaskStatus = (typeof taskStatuses)[number];
 export type TeamKind = (typeof teamKinds)[number];
 export type MembershipRole = (typeof membershipRoles)[number];
 export type ActorType = (typeof actorTypes)[number];
+
+/** Three days as an exact duration. The SQL migration uses `interval '3 days'`. */
+export const FOLLOW_UP_MS = 3 * 24 * 60 * 60 * 1000;
+
+export function followUpFrom(from: Date): Date {
+  return new Date(from.getTime() + FOLLOW_UP_MS);
+}
+
+/** IU → do_now, urgent only → delegate, important only → schedule, neither → later. */
+export function suggestAction(important: boolean, urgent: boolean): Action {
+  if (important && urgent) return "do_now";
+  if (urgent) return "delegate";
+  if (important) return "schedule";
+  return "later";
+}
+
+/**
+ * A schedule task with no calendar id needs a calendar.
+ * Any calendar id forces needsCalendar false.
+ * Leaving schedule clears an implied needsCalendar unless the caller sets one.
+ */
+export function resolveNeedsCalendar(
+  action: Action,
+  calendarEventId: string | null,
+  explicit: boolean | undefined,
+  previous: { action: Action; needsCalendar: boolean } | null,
+): boolean {
+  if (calendarEventId) return false;
+  if (action === "schedule") return true;
+  if (explicit !== undefined) return explicit;
+  if (!previous || previous.action === "schedule") return false;
+  return previous.needsCalendar;
+}
+
+/** Morning queue. Schedule is strictly overdue; a delegate follow-up includes due now. */
+export function inMorningQueue(
+  task: {
+    status: TaskStatus;
+    action: Action;
+    needsCalendar: boolean;
+    dueAt: string | Date | null;
+    createdAt: string | Date;
+  },
+  now: Date = new Date(),
+): boolean {
+  if (task.status !== "open") return false;
+  if (task.action === "do_now") return true;
+  const dueMs = task.dueAt == null ? null : new Date(task.dueAt).getTime();
+  if (task.action === "schedule") {
+    if (task.needsCalendar) return true;
+    return dueMs != null && !Number.isNaN(dueMs) && dueMs < now.getTime();
+  }
+  if (task.action === "delegate") {
+    if (dueMs != null && !Number.isNaN(dueMs) && dueMs <= now.getTime()) return true;
+    if (dueMs == null) {
+      const createdMs = new Date(task.createdAt).getTime();
+      return !Number.isNaN(createdMs) && createdMs < now.getTime() - FOLLOW_UP_MS;
+    }
+  }
+  return false;
+}
 
 export const actorRefSchema = z.object({
   type: z.enum(actorTypes),
@@ -28,8 +89,10 @@ export const taskSchema = z.object({
   owner: actorRefSchema,
   important: z.boolean(),
   urgent: z.boolean(),
-  lane: z.enum(lanes),
+  action: z.enum(actions),
   waitingOn: z.string().nullable(),
+  calendarEventId: z.string().nullable(),
+  needsCalendar: z.boolean(),
   project: z.string().nullable(),
   dueAt: z.string().nullable(),
   outcome: z.string().nullable(),
@@ -50,8 +113,10 @@ export const createTaskSchema = z
     owner: actorRefSchema.optional(),
     important: z.boolean().optional(),
     urgent: z.boolean().optional(),
-    lane: z.enum(lanes).optional(),
+    action: z.enum(actions).optional(),
     waitingOn: z.string().trim().max(200).nullable().optional(),
+    calendarEventId: z.string().trim().max(1024).nullable().optional(),
+    needsCalendar: z.boolean().optional(),
     project: z.string().trim().max(120).nullable().optional(),
     dueAt: dueAt.optional(),
   })
@@ -65,8 +130,10 @@ export const updateTaskSchema = z
     owner: actorRefSchema.optional(),
     important: z.boolean().optional(),
     urgent: z.boolean().optional(),
-    lane: z.enum(lanes).optional(),
+    action: z.enum(actions).optional(),
     waitingOn: z.string().trim().max(200).nullable().optional(),
+    calendarEventId: z.string().trim().max(1024).nullable().optional(),
+    needsCalendar: z.boolean().optional(),
     project: z.string().trim().max(120).nullable().optional(),
     dueAt: dueAt.optional(),
   })

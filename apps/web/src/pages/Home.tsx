@@ -1,4 +1,4 @@
-import type { BotTokenSummary, Lane, Member, Task, TeamSummary } from "@hearth/shared";
+import type { Action, BotTokenSummary, Member, Task, TeamSummary } from "@hearth/shared";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
 import { useAuth } from "@/auth";
@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { ApiError, api } from "@/lib/api";
 import { greeting } from "@/lib/format";
 
-type View = Lane | "done";
+type View = Action | "done";
 
 type Bundle = {
   team: TeamSummary;
@@ -21,9 +21,10 @@ type Bundle = {
 };
 
 const views: { id: View; label: string }[] = [
-  { id: "next", label: "Next" },
-  { id: "waiting", label: "Waiting" },
-  { id: "someday", label: "Someday" },
+  { id: "do_now", label: "Do now" },
+  { id: "delegate", label: "Delegate" },
+  { id: "schedule", label: "Schedule" },
+  { id: "later", label: "Later" },
   { id: "done", label: "Done" },
 ];
 
@@ -48,7 +49,7 @@ export function Home() {
       setBundles((current) =>
         nextBundles.map((bundle) => ({
           ...bundle,
-          view: current.find((item) => item.team.id === bundle.team.id)?.view ?? "next",
+          view: current.find((item) => item.team.id === bundle.team.id)?.view ?? "do_now",
         })),
       );
       setImmediate(queue.tasks);
@@ -105,10 +106,13 @@ export function Home() {
             Refresh
           </button>
         </div>
-        <p className="text-sm text-muted">Open tasks in Next. Important and urgent come first, then whatever is due.</p>
+        <p className="text-sm text-muted">
+          Do now, scheduled tasks that still need a calendar or are overdue, and delegated follow-ups that are due.
+          Important and urgent come first.
+        </p>
         {loading ? <p className="mt-4 text-sm text-muted">Loading your lists…</p> : null}
         {!loading && immediate.length === 0 ? (
-          <p className="mt-4 text-sm text-muted">Nothing in Next across your lists.</p>
+          <p className="mt-4 text-sm text-muted">Nothing to do immediately.</p>
         ) : null}
         <ol className="mt-2">
           {immediate.map((task, index) => (
@@ -183,7 +187,7 @@ function TeamSheet({
   onComplete: (task: Task) => void;
 }) {
   const visible = bundle.tasks.filter((task) =>
-    bundle.view === "done" ? task.status === "done" : task.status === "open" && task.lane === bundle.view,
+    bundle.view === "done" ? task.status === "done" : task.status === "open" && task.action === bundle.view,
   );
   return (
     <section className="rounded-3xl border border-line bg-sheet/90 px-4 py-4 sm:px-5">
@@ -206,7 +210,7 @@ function TeamSheet({
           </Link>
         </div>
       </div>
-      <div className="mt-3 flex gap-1 overflow-x-auto" role="tablist" aria-label={`${bundle.team.name} lanes`}>
+      <div className="mt-3 flex gap-1 overflow-x-auto" role="tablist" aria-label={`${bundle.team.name} actions`}>
         {views.map((view) => (
           <button
             key={view.id}
@@ -216,8 +220,8 @@ function TeamSheet({
             onClick={() => onView(view.id)}
             className={
               bundle.view === view.id
-                ? "rounded-full bg-ink px-3 py-1 text-xs text-sheet"
-                : "rounded-full px-3 py-1 text-xs text-muted hover:bg-ink/5"
+                ? "shrink-0 whitespace-nowrap rounded-full bg-ink px-3 py-1 text-xs text-sheet"
+                : "shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-xs text-muted hover:bg-ink/5"
             }
           >
             {view.label}
@@ -303,7 +307,7 @@ function HouseholdDialog({
 
 async function loadBundle(team: TeamSummary): Promise<Bundle> {
   const [detail, tokens, tasks] = await Promise.all([api.team(team.id), api.tokens(team.id), api.tasks({ teamId: team.id })]);
-  return { team: detail.team, members: detail.members, tokens: tokens.tokens, tasks: tasks.tasks, view: "next" };
+  return { team: detail.team, members: detail.members, tokens: tokens.tokens, tasks: tasks.tasks, view: "do_now" };
 }
 
 function ownerNames(bundles: Bundle[]) {
@@ -320,8 +324,9 @@ function ownerMapKey(task: Task) {
 }
 
 function emptyCopy(view: View) {
-  if (view === "next") return "Next is clear. Add a task, or leave it that way.";
-  if (view === "waiting") return "Nothing is blocked.";
-  if (view === "someday") return "Someday is clear.";
+  if (view === "do_now") return "Do now is clear. Add a task, or leave it that way.";
+  if (view === "delegate") return "Nothing is delegated.";
+  if (view === "schedule") return "Nothing to schedule.";
+  if (view === "later") return "Later is clear.";
   return "Nothing finished yet.";
 }

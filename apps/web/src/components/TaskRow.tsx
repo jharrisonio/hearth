@@ -45,8 +45,12 @@ export function TaskRow({
           {[
             teamLabel,
             task.project,
-            task.dueAt ? `${overdue ? "Overdue" : "Due"} ${formatDue(task.dueAt)}` : null,
-            task.lane === "waiting" && task.waitingOn ? `Waiting on ${task.waitingOn}` : null,
+            task.dueAt
+              ? `${overdue ? "Overdue" : task.action === "delegate" ? "Follow up" : "Due"} ${formatDue(task.dueAt)}`
+              : null,
+            task.action === "delegate" && task.waitingOn ? `Waiting on ${task.waitingOn}` : null,
+            task.action === "schedule" && task.needsCalendar ? "Needs a calendar" : null,
+            task.action === "schedule" && task.calendarEventId ? "On the calendar" : null,
             ownerLabel,
           ]
             .filter(Boolean)

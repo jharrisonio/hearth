@@ -1,4 +1,4 @@
-export {};
+import { inMorningQueue } from "../packages/shared/src/index.js";
 
 /**
  * Proves personal/household isolation plus the task operations in the v1 brief.
@@ -15,14 +15,17 @@ type Task = {
   teamId: string;
   title: string;
   status: "open" | "done";
-  lane: "next" | "waiting" | "someday";
+  action: "do_now" | "delegate" | "schedule" | "later";
   important: boolean;
   urgent: boolean;
   waitingOn: string | null;
+  calendarEventId: string | null;
+  needsCalendar: boolean;
   outcome: string | null;
   completedAt: string | null;
   owner: ActorRef;
   dueAt: string | null;
+  createdAt: string;
 };
 type Team = { id: string; name: string; kind: "personal" | "household"; role: string };
 
@@ -131,12 +134,15 @@ async function main() {
   const personal = await createTask(james, {
     teamId: jamesPersonal.id,
     title: secretTitle,
-    lane: "next",
     important: true,
     urgent: true,
   });
   assert(personal.owner.type === "user", "default owner is the signed-in user");
-  assert(personal.lane === "next" && personal.important && personal.urgent, "create defaults and flags");
+  assert(
+    personal.action === "do_now" && personal.important && personal.urgent && personal.needsCalendar === false,
+    "create suggests do_now from both flags",
+  );
+  assert(personal.calendarEventId == null, "create does not invent a calendar event");
 
   expectStatus(await call(naomi, "GET", `/tasks?teamId=${jamesPersonal.id}`), 403, "naomi list personal");
   expectStatus(
@@ -161,7 +167,7 @@ async function main() {
   const shared = await createTask(james, {
     teamId: household.id,
     title: `isolation household ${stamp}`,
-    lane: "next",
+    action: "do_now",
   });
   const naomiHousehold = expectStatus(await call(naomi, "GET", `/tasks?teamId=${household.id}`), 200, "naomi household") as {
     tasks: Task[];
@@ -173,7 +179,7 @@ async function main() {
   const naomiWrote = await createTask(naomi, {
     teamId: household.id,
     title: `isolation naomi household ${stamp}`,
-    lane: "someday",
+    action: "later",
   });
   const jamesSees = expectStatus(await call(james, "GET", `/tasks?teamId=${household.id}`), 200, "james household") as {
     tasks: Task[];
@@ -187,16 +193,17 @@ async function main() {
     "patch status",
   );
   expectStatus(
-    await call(james, "PATCH", `/tasks/${personal.id}`, { lane: "waiting" }),
+    await call(james, "PATCH", `/tasks/${personal.id}`, { action: "delegate" }),
     400,
-    "waiting without waitingOn",
+    "delegate without waitingOn",
   );
   const waiting = expectStatus(
-    await call(james, "PATCH", `/tasks/${personal.id}`, { lane: "waiting", waitingOn: "the weekend" }),
+    await call(james, "PATCH", `/tasks/${personal.id}`, { action: "delegate", waitingOn: "the weekend" }),
     200,
-    "set waiting",
+    "set delegate",
   ) as Task;
-  assert(waiting.lane === "waiting" && waiting.waitingOn === "the weekend", "waitingOn stored");
+  assert(waiting.action === "delegate" && waiting.waitingOn === "the weekend", "waitingOn stored");
+  assert(waiting.dueAt == null, "update does not invent a follow-up date");
   expectStatus(await call(james, "POST", `/tasks/${shared.id}/complete`, {}), 400, "complete without outcome");
   expectStatus(await call(james, "POST", `/tasks/${shared.id}/complete`, { outcome: "   " }), 400, "blank outcome");
   const done = expectStatus(
@@ -210,7 +217,7 @@ async function main() {
     409,
     "complete twice",
   );
-  console.log("ok  update rejects status, waitingOn is required, complete needs an outcome");
+  console.log("ok  update rejects status, delegated tasks need waitingOn, complete needs an outcome");
 
   expectStatus(await call(naomi, "POST", `/teams/${household.id}/tokens`, { label: "nope" }), 403, "member mint");
   expectStatus(
@@ -234,7 +241,7 @@ async function main() {
   );
 
   const botTask = expectStatus(
-    await call(null, "POST", "/tasks", { teamId: jamesPersonal.id, title: `isolation bot ${stamp}`, lane: "next" }, minted.secret),
+    await call(null, "POST", "/tasks", { teamId: jamesPersonal.id, title: `isolation bot ${stamp}`, action: "do_now" }, minted.secret),
     201,
     "bot create",
   ) as Task;
@@ -286,6 +293,8 @@ async function main() {
   );
   console.log("ok  revoked token is rejected");
 
+  await checkActions(james, jamesPersonal.id, stamp);
+  console.log("ok  action suggestion, constraints, and morning queue");
   await checkOrder(james, jamesPersonal.id, stamp);
   console.log("ok  do-immediately order");
   console.log("isolation check passed");
@@ -296,28 +305,132 @@ async function checkOrder(cookie: string, teamId: string, stamp: string) {
   const make = (title: string, fields: Record<string, unknown>) =>
     createTask(cookie, { teamId, title: `${stamp} ${title}`, project: `isolation-${stamp}`, ...fields });
 
-  const neitherOlder = await make("neither-older", { lane: "next", important: false, urgent: false });
-  const neitherNewer = await make("neither-newer", { lane: "next", important: false, urgent: false });
-  const urgentOnly = await make("urgent", { lane: "next", important: false, urgent: true, dueAt: due(1) });
-  const importantOnly = await make("important", { lane: "next", important: true, urgent: false, dueAt: due(15) });
-  const bothLater = await make("both-later", { lane: "next", important: true, urgent: true, dueAt: due(20) });
-  const bothSooner = await make("both-sooner", { lane: "next", important: true, urgent: true, dueAt: due(10) });
-  const bothNull = await make("both-null", { lane: "next", important: true, urgent: true });
-  const someday = await make("someday", { lane: "someday", important: true, urgent: true });
-  const done = await make("done", { lane: "next", important: true, urgent: true });
+  const neitherOlder = await make("neither-older", { action: "do_now", important: false, urgent: false });
+  const neitherNewer = await make("neither-newer", { action: "do_now", important: false, urgent: false });
+  const urgentOnly = await make("urgent", { action: "do_now", important: false, urgent: true, dueAt: due(1) });
+  const importantOnly = await make("important", { action: "do_now", important: true, urgent: false, dueAt: due(15) });
+  const bothLater = await make("both-later", { action: "do_now", important: true, urgent: true, dueAt: due(20) });
+  const bothSooner = await make("both-sooner", { action: "do_now", important: true, urgent: true, dueAt: due(10) });
+  const bothNull = await make("both-null", { action: "do_now", important: true, urgent: true });
+  const later = await make("later", { action: "later", important: true, urgent: true });
+  const done = await make("done", { action: "do_now", important: true, urgent: true });
   expectStatus(await call(cookie, "POST", `/tasks/${done.id}/complete`, { outcome: "finished during the check" }), 200, "order complete");
 
   const queue = expectStatus(await call(cookie, "GET", `/tasks/do-immediately?teamId=${teamId}`), 200, "order queue") as {
     tasks: Task[];
   };
   for (const task of queue.tasks) {
-    assert(task.status === "open" && task.lane === "next", `do-immediately returned ${task.status}/${task.lane}`);
+    assert(task.status === "open" && inMorningQueue(task), `do-immediately returned ${task.status}/${task.action}`);
   }
   const wanted = [bothSooner, bothLater, bothNull, importantOnly, urgentOnly, neitherNewer, neitherOlder].map((task) => task.id);
   const actual = queue.tasks.map((task) => task.id).filter((id) => wanted.includes(id));
   assert(actual.join() === wanted.join(), `order mismatch\n want ${wanted.join(" ")}\n got  ${actual.join(" ")}`);
   const ids = new Set(queue.tasks.map((task) => task.id));
-  assert(!ids.has(someday.id) && !ids.has(done.id), "someday and done tasks leaked into do-immediately");
+  assert(!ids.has(later.id) && !ids.has(done.id), "later and done tasks leaked into do-immediately");
+}
+
+async function checkActions(cookie: string, teamId: string, stamp: string) {
+  const future = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const make = (title: string, fields: Record<string, unknown>) =>
+    createTask(cookie, { teamId, title: `${stamp} ${title}`, project: `isolation-${stamp}`, ...fields });
+
+  const doNow = await make("filter-do-now", { action: "do_now", dueAt: future });
+  const scheduleNeeds = await make("filter-schedule-needs", { action: "schedule", dueAt: future });
+  const scheduleFuture = await make("filter-schedule-future", {
+    action: "schedule",
+    calendarEventId: "evt-future",
+    needsCalendar: true,
+    dueAt: future,
+  });
+  const schedulePast = await make("filter-schedule-past", {
+    action: "schedule",
+    calendarEventId: "evt-past",
+    dueAt: past,
+  });
+  const delegateFuture = await make("filter-delegate-future", { action: "delegate", waitingOn: "Alex", dueAt: future });
+  const delegateDue = await make("filter-delegate-due", { action: "delegate", waitingOn: "Sam", dueAt: past });
+  const delegateDefault = await make("filter-delegate-default", { action: "delegate", waitingOn: "Pat" });
+  const later = await make("filter-later", { action: "later", important: true, urgent: true });
+  const override = await make("filter-override", {
+    action: "schedule",
+    important: false,
+    urgent: false,
+    calendarEventId: "evt-override",
+  });
+  const suggestedDelegate = await make("suggest-delegate", { urgent: true, waitingOn: "the council" });
+  const suggestedSchedule = await make("suggest-schedule", { important: true, urgent: false });
+  const suggestedLater = await make("suggest-later", { important: false, urgent: false });
+  const suggestedNow = await make("suggest-now", { important: true, urgent: true });
+
+  assert(scheduleNeeds.action === "schedule" && scheduleNeeds.needsCalendar === true && scheduleNeeds.calendarEventId == null, "schedule without an id needs a calendar");
+  assert(scheduleFuture.needsCalendar === false && scheduleFuture.calendarEventId === "evt-future", "calendar id forces needsCalendar false");
+  assert(schedulePast.needsCalendar === false, "past schedule with an id is linked");
+  assert(override.action === "schedule" && override.important === false && override.urgent === false, "action overrides the matrix");
+  assert(override.needsCalendar === false, "overridden schedule with an id does not need a calendar");
+  assert(suggestedDelegate.action === "delegate" && suggestedDelegate.important === false && suggestedDelegate.urgent === true, "urgent only suggests delegate");
+  assert(suggestedSchedule.action === "schedule" && suggestedSchedule.needsCalendar === true, "important only suggests schedule");
+  assert(suggestedLater.action === "later" && suggestedLater.needsCalendar === false, "neither suggests later");
+  assert(suggestedNow.action === "do_now" && suggestedNow.needsCalendar === false, "both flags suggest do_now");
+  assert(delegateDefault.dueAt != null, "omitted delegate dueAt is filled in");
+  const followUpDelta = new Date(delegateDefault.dueAt ?? 0).getTime() - Date.now();
+  assert(Math.abs(followUpDelta - 3 * 24 * 60 * 60 * 1000) < 120_000, "delegate follow-up defaults to about three days");
+
+  expectStatus(
+    await call(cookie, "POST", "/tasks", { teamId, title: `${stamp} delegate-missing`, action: "delegate" }),
+    400,
+    "create delegate without waitingOn",
+  );
+  expectStatus(
+    await call(cookie, "POST", "/tasks", { teamId, title: `${stamp} suggest-missing`, urgent: true }),
+    400,
+    "suggested delegate without waitingOn",
+  );
+  expectStatus(
+    await call(cookie, "POST", "/tasks", { teamId, title: `${stamp} old-lane`, lane: "next" }),
+    400,
+    "lane body removed",
+  );
+  expectStatus(await call(cookie, "GET", `/tasks?teamId=${teamId}&lane=next`), 400, "lane query removed");
+  expectStatus(await call(cookie, "GET", `/tasks?teamId=${teamId}&action=nope`), 400, "bad action");
+
+  const delegates = expectStatus(await call(cookie, "GET", `/tasks?teamId=${teamId}&action=delegate`), 200, "filter delegate") as {
+    tasks: Task[];
+  };
+  assert(delegates.tasks.every((task) => task.action === "delegate"), "action filter is exact");
+  assert(delegates.tasks.some((task) => task.id === delegateDue.id), "action filter includes the delegate");
+
+  const queue = await queueIds(cookie, teamId);
+  for (const task of queue.tasks) assert(inMorningQueue(task), `morning queue included ${task.action}`);
+  const ids = new Set(queue.tasks.map((task) => task.id));
+  assert(ids.has(doNow.id), "do_now is in the morning queue");
+  assert(ids.has(scheduleNeeds.id), "schedule that needs a calendar is in the morning queue");
+  assert(!ids.has(scheduleFuture.id), "future schedule with a calendar id leaked into the morning queue");
+  assert(ids.has(schedulePast.id), "overdue schedule is in the morning queue");
+  assert(!ids.has(delegateFuture.id), "future delegate leaked into the morning queue");
+  assert(ids.has(delegateDue.id), "due delegate is in the morning queue");
+  assert(!ids.has(delegateDefault.id), "fresh delegate follow-up leaked into the morning queue");
+  assert(!ids.has(later.id), "later leaked into the morning queue");
+  assert(!ids.has(override.id), "linked schedule with no due date leaked into the morning queue");
+  assert(!ids.has(suggestedDelegate.id), "suggested delegate with a future follow-up leaked");
+  assert(ids.has(suggestedSchedule.id), "suggested schedule is in the morning queue");
+  assert(!ids.has(suggestedLater.id), "suggested later leaked into the morning queue");
+  assert(ids.has(suggestedNow.id), "suggested do_now is in the morning queue");
+
+  const linked = expectStatus(
+    await call(cookie, "PATCH", `/tasks/${scheduleNeeds.id}`, { calendarEventId: "evt-added" }),
+    200,
+    "link calendar",
+  ) as Task;
+  assert(linked.action === "schedule" && linked.needsCalendar === false && linked.calendarEventId === "evt-added", "linking a calendar clears needsCalendar");
+  const after = await queueIds(cookie, teamId);
+  assert(!after.tasks.some((task) => task.id === scheduleNeeds.id), "linked future schedule left the morning queue");
+}
+
+async function queueIds(cookie: string, teamId: string) {
+  return expectStatus(await call(cookie, "GET", `/tasks/do-immediately?teamId=${teamId}`), 200, "morning queue") as {
+    tasks: Task[];
+  };
 }
 
 function one<T>(items: T[], label: string): T {

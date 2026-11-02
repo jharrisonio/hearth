@@ -1,4 +1,4 @@
-import type { BotTokenSummary, Lane, Member, Task } from "@hearth/shared";
+import type { Action, BotTokenSummary, Member, Task } from "@hearth/shared";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -67,8 +67,9 @@ function TaskForm({
   const activeTokens = tokens.filter((token) => token.revokedAt == null || token.id === task?.owner.id);
   const [title, setTitle] = useState(task?.title ?? "");
   const [detail, setDetail] = useState(task?.detail ?? "");
-  const [lane, setLane] = useState<Lane>(task?.lane ?? "next");
+  const [action, setAction] = useState<Action>(task?.action ?? "do_now");
   const [waitingOn, setWaitingOn] = useState(task?.waitingOn ?? "");
+  const [calendarEventId, setCalendarEventId] = useState(task?.calendarEventId ?? "");
   const [project, setProject] = useState(task?.project ?? "");
   const [dueAt, setDueAt] = useState(toLocalInput(task?.dueAt ?? null));
   const [important, setImportant] = useState(task?.important ?? false);
@@ -86,8 +87,8 @@ function TaskForm({
       setError("A task needs a title.");
       return;
     }
-    if (lane === "waiting" && !waitingOn.trim()) {
-      setError("Say what this is waiting on.");
+    if (action === "delegate" && !waitingOn.trim()) {
+      setError("Say who or what this is waiting on.");
       return;
     }
     if (!parsedOwner) {
@@ -99,10 +100,11 @@ function TaskForm({
     const body = {
       title: title.trim(),
       detail: detail.trim() || null,
-      lane,
-      waitingOn: lane === "waiting" ? waitingOn.trim() : null,
+      action,
+      waitingOn: action === "delegate" ? waitingOn.trim() : null,
+      ...(action === "schedule" ? { calendarEventId: calendarEventId.trim() || null } : {}),
       project: project.trim() || null,
-      dueAt: fromLocalInput(dueAt),
+      dueAt: action === "delegate" && !task && !dueAt ? undefined : fromLocalInput(dueAt),
       important,
       urgent,
       owner: parsedOwner,
@@ -137,11 +139,12 @@ function TaskForm({
       </label>
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <label className="text-sm">
-          Lane
-          <select className={fieldClass} value={lane} onChange={(event) => setLane(event.target.value as Lane)}>
-            <option value="next">Next</option>
-            <option value="waiting">Waiting</option>
-            <option value="someday">Someday</option>
+          Action
+          <select className={fieldClass} value={action} onChange={(event) => setAction(event.target.value as Action)}>
+            <option value="do_now">Do now</option>
+            <option value="delegate">Delegate</option>
+            <option value="schedule">Schedule</option>
+            <option value="later">Later</option>
           </select>
         </label>
         <label className="text-sm">
@@ -161,11 +164,35 @@ function TaskForm({
           </select>
         </label>
       </div>
-      {lane === "waiting" ? (
+      {action === "delegate" ? (
         <label className="mt-3 block text-sm">
           Waiting on
-          <input className={fieldClass} value={waitingOn} onChange={(event) => setWaitingOn(event.target.value)} required />
+          <input
+            className={fieldClass}
+            value={waitingOn}
+            onChange={(event) => setWaitingOn(event.target.value)}
+            placeholder="Who has this, or what you need back"
+            required
+          />
         </label>
+      ) : null}
+      {action === "schedule" ? (
+        <div className="mt-3">
+          <label className="block text-sm">
+            Calendar event id
+            <input
+              className={fieldClass}
+              value={calendarEventId}
+              onChange={(event) => setCalendarEventId(event.target.value)}
+              placeholder="Leave blank if it is not on the calendar yet"
+            />
+          </label>
+          <p className="mt-1 text-xs text-muted">
+            {calendarEventId.trim()
+              ? "Linked. It leaves the morning queue until the due date."
+              : "Needs a calendar. It stays on the morning queue until an event id is saved."}
+          </p>
+        </div>
       ) : null}
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <label className="text-sm">
@@ -173,10 +200,17 @@ function TaskForm({
           <input className={fieldClass} value={project} onChange={(event) => setProject(event.target.value)} placeholder="Kitchen, Admin…" />
         </label>
         <label className="text-sm">
-          Due
+          {action === "delegate" ? "Follow-up" : "Due"}
           <input className={fieldClass} type="datetime-local" value={dueAt} onChange={(event) => setDueAt(event.target.value)} />
         </label>
       </div>
+      {action === "delegate" ? (
+        <p className="mt-1 text-xs text-muted">
+          {task
+            ? "This is the follow-up. Clear it and the task returns to the morning queue after three days."
+            : "This is the follow-up. Leave it blank to nudge you in three days."}
+        </p>
+      ) : null}
       <div className="mt-3 flex gap-4 text-sm">
         <label className="inline-flex items-center gap-2">
           <input type="checkbox" checked={important} onChange={(event) => setImportant(event.target.checked)} />
