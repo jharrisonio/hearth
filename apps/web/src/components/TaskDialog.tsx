@@ -567,7 +567,7 @@ function TaskForm({
       <footer className="relative z-10 shrink-0 bg-black px-7 pb-[calc(26px+env(safe-area-inset-bottom))] pt-6 before:pointer-events-none before:absolute before:inset-x-0 before:-top-10 before:h-10 before:bg-gradient-to-b before:from-transparent before:to-black before:content-['']">
         {error ? <p className="mb-4 text-[13px] text-[#c9a35a]">{error}</p> : null}
         {task && saveLabel ? (
-          <p className="mb-4 text-center text-[10px] font-normal uppercase tracking-[0.32em] text-[#5c5c5c]" aria-live="polite">
+          <p className="mb-4 text-center text-[10px] font-normal uppercase tracking-[0.32em] text-[#a8a8a8]" aria-live="polite">
             {saveLabel}
           </p>
         ) : null}
