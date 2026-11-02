@@ -1,11 +1,9 @@
 import {
-  actions,
   calendarHref,
   delegateRequiresWaitingOn,
   isHttpUrl,
   needsCheckIn,
   scheduleRequiresDueAt,
-  suggestAction,
   type Action,
   type AreaSummary,
   type BotSummary,
@@ -18,6 +16,7 @@ import {
   type UpdateTaskInput,
 } from "@hearth/shared";
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { CatalogPicker } from "@/components/CatalogPicker";
 import { DeleteDialog } from "@/components/DeleteDialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -52,7 +51,13 @@ export function TaskDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent pinned layer={layer}>
+      <DialogContent
+        pinned
+        layer={layer}
+        onPointerDownOutside={keepCatalogOpen}
+        onFocusOutside={keepCatalogOpen}
+        onInteractOutside={keepCatalogOpen}
+      >
         {open ? (
           <TaskForm
             key={task?.id ?? "new"}
@@ -115,7 +120,6 @@ function TaskForm({
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
   const [cancelling, setCancelling] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const suggested = suggestAction(important, urgent);
   const parsedOwner = parseOwnerKey(owner);
   const waitingRequired = delegateRequiresWaitingOn(action, parsedOwner);
   const ownerChoices = new Set([
@@ -196,7 +200,10 @@ function TaskForm({
   const commitRef = useRef<() => Promise<boolean>>(async () => true);
 
   function selectAction(next: Action) {
+    const axes = axesFor(next);
     setAction(next);
+    setImportant(axes.important);
+    setUrgent(axes.urgent);
     if (next === "delegate" && !dueAt) {
       const when = new Date();
       when.setDate(when.getDate() + 3);
@@ -397,52 +404,15 @@ function TaskForm({
           <DialogTitle className="mb-0">{task ? "Task" : "New task"}</DialogTitle>
         </div>
       </header>
-      <DialogDescription className="sr-only">Important and urgent choose do now, delegate, schedule, or later.</DialogDescription>
+      <DialogDescription className="sr-only">
+        Set the action on the matrix. Important and urgent are the axis titles.
+      </DialogDescription>
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-7 pb-8 pt-4">
       <label className={labelClass}>
         Title
         <input className={fieldClass} value={title} onChange={(event) => setTitle(event.target.value)} autoFocus required />
       </label>
-      <p className={labelClass}>Action</p>
-      <div className="flex flex-wrap gap-[22px]" role="group" aria-label="Action">
-        {actions.map((item) => {
-          const on = item === action;
-          return (
-            <button
-              key={item}
-              type="button"
-              aria-pressed={on}
-              onClick={() => selectAction(item)}
-              className={cn(
-                "relative py-2.5 text-[10px] font-normal uppercase tracking-[0.32em] transition-colors duration-200",
-                on ? "text-white" : "text-[#a8a8a8] hover:text-white",
-              )}
-            >
-              {actionLabel[item]}
-              {on ? <span className="absolute bottom-1 left-0 right-[0.32em] h-px bg-white" /> : null}
-            </button>
-          );
-        })}
-      </div>
-      <p className={hintClass}>
-        {suggested === action ? (
-          "Matches the matrix."
-        ) : (
-          <>
-            Matrix suggests <b className="font-normal text-[#bbb]">{actionLabel[suggested]}</b> — override kept.
-          </>
-        )}
-      </p>
-      <div className="mt-[30px] grid grid-cols-2 gap-4">
-        <label className="flex items-center gap-2 text-[14px] font-light tracking-normal text-[#ccc] normal-case">
-          <input type="checkbox" checked={important} onChange={(event) => setImportant(event.target.checked)} />
-          Important
-        </label>
-        <label className="flex items-center gap-2 text-[14px] font-light tracking-normal text-[#ccc] normal-case">
-          <input type="checkbox" checked={urgent} onChange={(event) => setUrgent(event.target.checked)} />
-          Urgent
-        </label>
-      </div>
+      <ActionMatrix action={action} onSelect={selectAction} />
       {action === "delegate" ? (
         <>
           <label className={labelClass}>
@@ -512,26 +482,30 @@ function TaskForm({
           {keepCurrentOwner ? <option value={owner}>Owner</option> : null}
         </select>
       </label>
-      <div className="grid grid-cols-1 gap-x-6 sm:grid-cols-2">
-        <ProjectField
-          value={projectId}
-          options={projects}
-          onChange={setProjectId}
-          onOpen={onOpenProject}
-          onCreate={(name) =>
-            createLink(name, (next) => api.createProject(teamId, { name: next }), setProjects, setProjectId, setError)
-          }
-        />
-        <LinkField
-          label="Area"
-          hint="A life or work domain."
-          placeholder="e.g. House"
-          value={areaId}
-          options={areas}
-          onChange={setAreaId}
-          onCreate={(name) => createLink(name, (next) => api.createArea(teamId, next), setAreas, setAreaId, setError)}
-        />
-      </div>
+      <CatalogPicker
+        label="Project"
+        emptyLabel="No project"
+        placeholder="Search projects"
+        emptyList="No projects yet."
+        value={projectId}
+        options={projects}
+        onChange={setProjectId}
+        onOpen={onOpenProject}
+        onCreate={(name) =>
+          createLink(name, (next) => api.createProject(teamId, { name: next }), setProjects, setProjectId, setError)
+        }
+      />
+      <CatalogPicker
+        label="Area"
+        emptyLabel="No area"
+        placeholder="Search areas"
+        emptyList="No areas yet."
+        hint="A life or work domain."
+        value={areaId}
+        options={areas}
+        onChange={setAreaId}
+        onCreate={(name) => createLink(name, (next) => api.createArea(teamId, next), setAreas, setAreaId, setError)}
+      />
       <label className={labelClass}>
         Detail
         <textarea className={cn(fieldClass, "resize-y")} rows={3} value={detail} onChange={(event) => setDetail(event.target.value)} />
@@ -842,201 +816,58 @@ async function createLink<T extends { id: string; name: string }>(
   }
 }
 
-function ProjectField({
-  value,
-  options,
-  onChange,
-  onOpen,
-  onCreate,
-}: {
-  value: string;
-  options: ProjectSummary[];
-  onChange: (id: string) => void;
-  onOpen: (projectId: string) => void;
-  onCreate: (name: string) => Promise<void>;
-}) {
-  const [query, setQuery] = useState("");
-  const [open, setOpen] = useState(false);
-  const [adding, setAdding] = useState(false);
-  const selected = options.find((option) => option.id === value) ?? null;
-  const needle = query.trim().toLowerCase();
-  const matches = options
-    .filter((option) => !needle || option.name.toLowerCase().includes(needle))
-    .slice(0, 8);
-  const exact = needle.length > 0 && options.some((option) => option.name.toLowerCase() === needle);
+const matrixRows: readonly (readonly Action[])[] = [
+  ["do_now", "schedule"],
+  ["delegate", "later"],
+];
 
-  async function add() {
-    const name = query.trim();
-    if (!name || exact) return;
-    setAdding(true);
-    try {
-      await onCreate(name);
-      setQuery("");
-      setOpen(false);
-    } catch {
-      // The form already shows the error.
-    } finally {
-      setAdding(false);
-    }
-  }
+const matrixCue: Record<Action, string> = {
+  do_now: "Important and urgent",
+  delegate: "Urgent",
+  schedule: "Important",
+  later: "Neither",
+};
 
+function ActionMatrix({ action, onSelect }: { action: Action; onSelect: (next: Action) => void }) {
   return (
     <div>
-      <span className={labelClass}>Project</span>
-      {selected ? (
-        <div className="flex items-baseline justify-between gap-4">
-          <button
-            type="button"
-            onClick={() => onOpen(selected.id)}
-            className="min-w-0 truncate text-left text-[15px] font-light text-[#eee] underline decoration-[#333] underline-offset-[5px] transition-colors duration-150 hover:decoration-white"
-          >
-            {selected.name}
-          </button>
-          <button
-            type="button"
-            onClick={() => onChange("")}
-            className="shrink-0 text-[10px] font-normal uppercase tracking-[0.28em] text-[#a8a8a8] hover:text-white"
-          >
-            Clear
-          </button>
+      <p className={labelClass}>Action</p>
+      <div role="group" aria-label="Action" className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-2.5">
+        <div />
+        <div className="grid grid-cols-2">
+          <p className="pb-2 text-center text-[9.5px] font-normal uppercase tracking-[0.28em] text-[#a8a8a8]">Urgent</p>
+          <div />
         </div>
-      ) : null}
-      <input
-        className={fieldClass}
-        value={query}
-        placeholder={selected ? "Change project" : "Search projects"}
-        aria-label="Search projects"
-        aria-autocomplete="list"
-        aria-expanded={open}
-        role="combobox"
-        onFocus={() => setOpen(true)}
-        onChange={(event) => {
-          setQuery(event.target.value);
-          setOpen(true);
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            event.preventDefault();
-            if (matches.length === 1 && matches[0]) {
-              onChange(matches[0].id);
-              setQuery("");
-              setOpen(false);
-              return;
-            }
-            void add();
-          }
-          if (event.key === "Escape") setOpen(false);
-        }}
-      />
-      {open ? (
-        <ul className="mt-1 border-b border-[#1c1c1c]" role="listbox">
-          {matches.map((option) => (
-            <li key={option.id}>
+        <div className="flex h-[5.25rem] items-center justify-center self-start">
+          <span className="whitespace-nowrap text-[8px] font-normal uppercase leading-none tracking-[0.12em] text-[#a8a8a8] [writing-mode:vertical-rl] rotate-180">
+            Important
+          </span>
+        </div>
+        <div className="grid grid-cols-2 gap-px border border-[#3a3a3a] bg-[#3a3a3a]">
+          {matrixRows.flat().map((item) => {
+            const on = item === action;
+            return (
               <button
+                key={item}
                 type="button"
-                role="option"
-                aria-selected={option.id === value}
-                className="block w-full py-2.5 text-left text-[15px] font-light text-[#ccc] transition-colors duration-150 hover:text-white"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => {
-                  onChange(option.id);
-                  setQuery("");
-                  setOpen(false);
-                }}
+                aria-pressed={on}
+                aria-label={`${actionLabel[item]}. ${matrixCue[item]}`}
+                onClick={() => onSelect(item)}
+                className={cn(
+                  "flex min-h-[5.25rem] items-center justify-center px-2 py-4 text-center text-[10px] font-normal uppercase tracking-[0.16em] transition-colors duration-200 sm:tracking-[0.26em]",
+                  on ? "bg-white text-black!" : "bg-black text-[#a8a8a8] hover:text-white",
+                )}
               >
-                {option.name}
-                {option.archivedAt ? <span className="ml-3 text-[10px] uppercase tracking-[0.28em] text-[#a8a8a8]">Archived</span> : null}
+                {actionLabel[item]}
               </button>
-            </li>
-          ))}
-          {needle && !exact ? (
-            <li>
-              <button
-                type="button"
-                className="block w-full py-2.5 text-left text-[15px] font-light text-[#a8a8a8] transition-colors duration-150 hover:text-white"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => void add()}
-                disabled={adding}
-              >
-                {adding ? "Adding…" : `Add ${query.trim()}`}
-              </button>
-            </li>
-          ) : null}
-          {matches.length === 0 && !needle ? <li className="py-2.5 text-[13px] text-[#a8a8a8]">No projects yet.</li> : null}
-        </ul>
-      ) : null}
-      <p className={hintClass}>Search by name. The name opens that project.</p>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
 
-function LinkField({
-  label,
-  hint,
-  placeholder,
-  value,
-  options,
-  onChange,
-  onCreate,
-}: {
-  label: string;
-  hint: string;
-  placeholder: string;
-  value: string;
-  options: { id: string; name: string; archivedAt: string | null }[];
-  onChange: (id: string) => void;
-  onCreate: (name: string) => Promise<void>;
-}) {
-  const [draft, setDraft] = useState("");
-  const [adding, setAdding] = useState(false);
-
-  async function add() {
-    const name = draft.trim();
-    if (!name) return;
-    setAdding(true);
-    try {
-      await onCreate(name);
-      setDraft("");
-    } catch {
-      // The form already shows the error.
-    } finally {
-      setAdding(false);
-    }
-  }
-
-  return (
-    <div>
-      <label className={labelClass}>
-        {label}
-        <select className={fieldClass} value={value} onChange={(event) => onChange(event.target.value)}>
-          <option value="">None</option>
-          {options.map((option) => (
-            <option key={option.id} value={option.id}>
-              {option.name}
-              {option.archivedAt ? " (archived)" : ""}
-            </option>
-          ))}
-        </select>
-      </label>
-      <div className="flex items-end gap-3">
-        <input
-          className={fieldClass}
-          value={draft}
-          placeholder={placeholder}
-          aria-label={`New ${label.toLowerCase()}`}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              void add();
-            }
-          }}
-        />
-        <Button type="button" onClick={() => void add()} disabled={adding || !draft.trim()}>
-          Add
-        </Button>
-      </div>
-      <p className={hintClass}>{hint}</p>
-    </div>
-  );
+function keepCatalogOpen(event: { target: EventTarget | null; preventDefault: () => void }) {
+  if (event.target instanceof Element && event.target.closest("[data-catalog-popover]")) event.preventDefault();
 }
