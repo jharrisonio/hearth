@@ -130,6 +130,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(outcome === undefined ? {} : { outcome }),
     }),
+  reopenTask: (id: string) => request<Task>(`/tasks/${id}/reopen`, { method: "POST", body: "{}" }),
   deleteTask: (id: string) => request<DeletedTask>(`/tasks/${id}`, { method: "DELETE" }),
   addTaskLink: (taskId: string, body: { title: string; url: string }) =>
     request<AttachedLink>(`/tasks/${taskId}/links`, { method: "POST", body: JSON.stringify(body) }),

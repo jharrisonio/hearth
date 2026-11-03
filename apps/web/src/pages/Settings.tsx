@@ -1,18 +1,19 @@
 import type { AreaSummary, AuthConfig, BotSummary, BotTokenSummary, ConnectorSummary, Member, TeamSummary } from "@hearth/shared";
 import { useEffect, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router";
+import { useNavigate, useParams } from "react-router";
 import { useAuth } from "@/auth";
-import { CloseIcon, iconButtonClass } from "@/components/Icons";
 import { Button } from "@/components/ui/button";
 import { ApiError, api } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { fieldClass, labelClass, pageTitleClass, sectionClass, subheadClass } from "@/lib/field";
 import { LIST_KEY } from "@/lib/list";
+import { useShell } from "@/shell";
 
 export function Settings() {
   const { teamId } = useParams();
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
+  const { chooseList } = useShell();
   const [teams, setTeams] = useState<TeamSummary[]>([]);
   const [team, setTeam] = useState<TeamSummary | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
@@ -67,7 +68,11 @@ export function Settings() {
         if (cancelled) return;
         setTeams(next);
         if (!teamId) {
-          const id = next.find((item) => item.kind === "household")?.id ?? next[0]?.id;
+          const stored = sessionStorage.getItem(LIST_KEY);
+          const id =
+            next.find((item) => item.id === stored)?.id ??
+            next.find((item) => item.kind === "household")?.id ??
+            next[0]?.id;
           if (id) navigate(`/teams/${id}`, { replace: true });
           else setLoading(false);
         }
@@ -83,8 +88,11 @@ export function Settings() {
   }, [teamId, navigate]);
 
   useEffect(() => {
-    if (teamId) void load(teamId);
-  }, [teamId]);
+    if (teamId) {
+      chooseList(teamId);
+      void load(teamId);
+    }
+  }, [teamId, chooseList]);
 
   useEffect(() => {
     void api.config().then(setConfig).catch(() => setConfig(null));
@@ -93,7 +101,7 @@ export function Settings() {
   const isOwner = team?.role === "owner";
 
   function openList(id: string) {
-    sessionStorage.setItem(LIST_KEY, id);
+    chooseList(id);
     navigate(`/teams/${id}`);
   }
 
@@ -192,7 +200,7 @@ export function Settings() {
     try {
       const created = await api.createTeam(name);
       setListName("");
-      sessionStorage.setItem(LIST_KEY, created.id);
+      chooseList(created.id);
       navigate(`/teams/${created.id}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not create the household.");
@@ -212,11 +220,8 @@ export function Settings() {
   }
 
   return (
-    <div className="min-h-dvh bg-black text-white">
-      <Link to="/" aria-label="Close" className={cn(iconButtonClass, "fixed right-2.5 top-2.5 z-10")}>
-        <CloseIcon />
-      </Link>
-      <main className="hearth-sheet mx-auto min-h-dvh w-full max-w-[560px] px-7 pb-20 pt-[92px]">
+    <div className="h-full min-h-0 bg-black text-white">
+      <main className="hearth-sheet mx-auto h-full w-full max-w-[560px] overflow-y-auto px-7 pb-16 pt-[calc(env(safe-area-inset-top)+3.5rem)]">
         <h1 className={pageTitleClass}>Settings</h1>
         {loading ? <p className="text-[10px] uppercase tracking-[0.4em] text-[#a8a8a8]">Loading</p> : null}
         {error ? <p className="mb-6 text-[13px] text-[#c9a35a]">{error}</p> : null}
@@ -336,7 +341,7 @@ export function Settings() {
 
             <Catalogue
               title="Areas"
-              hint="Domains of life or work, such as House or Finance. Projects are separate and open from the list."
+              hint="Domains of life or work, such as House or Finance. Projects have their own tab."
               placeholder="New area"
               items={areas}
               onCreate={async (name) => {

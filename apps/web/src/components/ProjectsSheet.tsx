@@ -1,71 +1,28 @@
 import { calendarHref, isProjectFront, type AreaSummary, type ProjectSummary, type Task } from "@hearth/shared";
 import { useEffect, useState } from "react";
+import { useNavigate, useParams } from "react-router";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { actionLabel, scheduleListCue } from "@/lib/action";
 import { ApiError, api } from "@/lib/api";
 import { cn } from "@/lib/cn";
-import { fieldClass, hintClass, labelClass, subheadClass } from "@/lib/field";
+import { fieldClass, hintClass, labelClass, pageTitleClass, subheadClass } from "@/lib/field";
 
-
-export function ProjectsSheet({
-  open,
-  layer = "base",
+export function ProjectsScreen({
   teamId,
   ownerId,
   refreshToken,
-  initialProjectId = null,
-  onClose,
-  onClearFocus,
-  onEditTask,
-}: {
-  open: boolean;
-  layer?: "base" | "front";
-  teamId: string;
-  ownerId: string;
-  refreshToken: number;
-  initialProjectId?: string | null;
-  onClose: () => void;
-  onClearFocus: () => void;
-  onEditTask: (task: Task) => void;
-}) {
-  return (
-    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent layer={layer}>
-        {open ? (
-          <ProjectsBody
-            key={teamId}
-            teamId={teamId}
-            ownerId={ownerId}
-            refreshToken={refreshToken}
-            initialProjectId={initialProjectId}
-            onClearFocus={onClearFocus}
-            onEditTask={onEditTask}
-          />
-        ) : null}
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function ProjectsBody({
-  teamId,
-  ownerId,
-  refreshToken,
-  initialProjectId,
-  onClearFocus,
   onEditTask,
 }: {
   teamId: string;
   ownerId: string;
   refreshToken: number;
-  initialProjectId: string | null;
-  onClearFocus: () => void;
   onEditTask: (task: Task) => void;
 }) {
+  const { projectId: routeProjectId } = useParams();
+  const navigate = useNavigate();
+  const projectId = routeProjectId ?? null;
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [showArchived, setShowArchived] = useState(false);
-  const [projectId, setProjectId] = useState<string | null>(initialProjectId);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -99,16 +56,21 @@ function ProjectsBody({
     };
   }, [teamId]);
 
+  function openAll() {
+    setCreating(false);
+    setError(null);
+    navigate("/projects");
+  }
+
   useEffect(() => {
-    if (!initialProjectId) return;
-    setProjectId(initialProjectId);
+    if (!projectId) return;
     setCreating(false);
     let cancelled = false;
     void api
       .projects(teamId, true)
       .then((list) => {
         if (cancelled) return;
-        const target = list.projects.find((item) => item.id === initialProjectId);
+        const target = list.projects.find((item) => item.id === projectId);
         if (!target) {
           setError("That project is not on this list.");
           return;
@@ -126,7 +88,7 @@ function ProjectsBody({
     return () => {
       cancelled = true;
     };
-  }, [initialProjectId, teamId]);
+  }, [projectId, teamId]);
 
   const project = projects.find((item) => item.id === projectId) ?? null;
 
@@ -141,8 +103,8 @@ function ProjectsBody({
         onCreated={(created) => {
           setProjects((rows) => [...rows.filter((row) => row.id !== created.id), created].sort(byName));
           setCreating(false);
-          setProjectId(created.id);
           setError(null);
+          navigate(`/projects/${created.id}`);
         }}
       />
     );
@@ -155,11 +117,7 @@ function ProjectsBody({
         ownerId={ownerId}
         project={project}
         refreshToken={refreshToken}
-        onBack={() => {
-          onClearFocus();
-          setProjectId(null);
-          setError(null);
-        }}
+        onBack={openAll}
         onSaved={(next) => {
           setProjects((rows) => rows.map((row) => (row.id === next.id ? next : row)).sort(byName));
         }}
@@ -167,10 +125,7 @@ function ProjectsBody({
           setProjects((rows) =>
             showArchived ? rows.map((row) => (row.id === archived.id ? archived : row)) : rows.filter((row) => row.id !== archived.id),
           );
-          if (archived.archivedAt && !showArchived) {
-            onClearFocus();
-            setProjectId(null);
-          }
+          if (archived.archivedAt && !showArchived) openAll();
         }}
         onEditTask={onEditTask}
       />
@@ -182,16 +137,12 @@ function ProjectsBody({
       <>
         <button
           type="button"
-          onClick={() => {
-            onClearFocus();
-            setProjectId(null);
-            setError(null);
-          }}
+          onClick={openAll}
           className="mb-8 text-[10px] font-normal uppercase tracking-[0.32em] text-[#a8a8a8] hover:text-white"
         >
           All projects
         </button>
-        <DialogTitle>Project</DialogTitle>
+        <h1 className={pageTitleClass}>Project</h1>
         {loading || !error ? <p className="text-[10px] uppercase tracking-[0.4em] text-[#a8a8a8]">Loading</p> : null}
         {error ? <p className="mt-4 text-[13px] text-[#c9a35a]">{error}</p> : null}
       </>
@@ -202,8 +153,8 @@ function ProjectsBody({
 
   return (
     <>
-      <DialogTitle>Projects</DialogTitle>
-      <DialogDescription>Open outcomes. Completed projects stay off this list.</DialogDescription>
+      <h1 className={pageTitleClass}>Projects</h1>
+      <p className="mt-3 text-[13px] font-light text-[#a8a8a8]">Open outcomes. Completed projects stay off this list.</p>
       {loading ? <p className="text-[10px] uppercase tracking-[0.4em] text-[#a8a8a8]">Loading</p> : null}
       {error ? <p className="mt-4 text-[13px] text-[#c9a35a]">{error}</p> : null}
       {!loading && visible.length === 0 ? <p className="mt-10 text-[13px] text-[#a8a8a8]">No projects yet.</p> : null}
@@ -213,8 +164,8 @@ function ProjectsBody({
             <button
               type="button"
               onClick={() => {
-                setProjectId(item.id);
                 setError(null);
+                navigate(`/projects/${item.id}`);
               }}
               className={cn(
                 "py-3.5 text-left text-[24px] font-light transition-colors duration-200 hover:text-white",
@@ -296,8 +247,10 @@ function CreateProject({
       >
         All projects
       </button>
-      <DialogTitle>New project</DialogTitle>
-      <DialogDescription>Name the outcome. Support notes are the plan. Add the steps on the next screen.</DialogDescription>
+      <h1 className={pageTitleClass}>New project</h1>
+      <p className="mt-3 text-[13px] font-light text-[#a8a8a8]">
+        Name the outcome. Support notes are the plan. Add the steps on the next screen.
+      </p>
       <label className={labelClass}>
         Outcome
         <input className={fieldClass} value={name} onChange={(event) => setName(event.target.value)} autoFocus required />
@@ -537,7 +490,7 @@ function ProjectDetail({
       >
         All projects
       </button>
-      <DialogTitle>{project.archivedAt ? "Completed" : "Project"}</DialogTitle>
+      <h1 className={pageTitleClass}>{project.archivedAt ? "Completed" : "Project"}</h1>
       <form onSubmit={(event) => void saveProject(event)}>
         <label className={labelClass}>
           Outcome

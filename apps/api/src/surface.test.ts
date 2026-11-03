@@ -916,6 +916,61 @@ describe("task surface", { concurrency: 1 }, () => {
     assert.equal((doneList.json as { tasks: { id: string }[] }).tasks.some((row) => row.id === finishedId), false);
   });
 
+  test("reopen clears a done or cancelled task back to open", async () => {
+    const fixture = await seed();
+    const other = await seed();
+    const created = await postTask(fixture.secret, {
+      teamId: fixture.team.id,
+      title: "File the notice",
+      action: "do_now",
+    });
+    assert.equal(created.status, 201);
+    const id = taskBody(created.json).id;
+
+    const stillOpen = await call(fixture.secret, "POST", `/tasks/${id}/reopen`, {});
+    assert.equal(stillOpen.status, 200);
+    assert.equal((stillOpen.json as { status: string }).status, "open");
+
+    const denied = await call(other.secret, "POST", `/tasks/${id}/reopen`, {});
+    assert.equal(denied.status, 403);
+
+    const done = await call(fixture.secret, "POST", `/tasks/${id}/complete`, { outcome: "Filed" });
+    assert.equal(done.status, 200);
+    const reopened = await call(fixture.secret, "POST", `/tasks/${id}/reopen`, {});
+    assert.equal(reopened.status, 200);
+    const openAgain = reopened.json as {
+      status: string;
+      outcome: string | null;
+      completedAt: string | null;
+      cancelledAt: string | null;
+    };
+    assert.equal(openAgain.status, "open");
+    assert.equal(openAgain.outcome, null);
+    assert.equal(openAgain.completedAt, null);
+    assert.equal(openAgain.cancelledAt, null);
+    const listed = await call(fixture.secret, "GET", `/tasks?teamId=${fixture.team.id}&status=open`);
+    assert.equal((listed.json as { tasks: { id: string }[] }).tasks.some((row) => row.id === id), true);
+    const hidden = await call(fixture.secret, "GET", `/tasks?teamId=${fixture.team.id}&status=done`);
+    assert.equal((hidden.json as { tasks: { id: string }[] }).tasks.some((row) => row.id === id), false);
+
+    const cancelled = await call(fixture.secret, "POST", `/tasks/${id}/cancel`, { outcome: "not needed" });
+    assert.equal(cancelled.status, 200);
+    const restored = await call(fixture.secret, "POST", `/tasks/${id}/reopen`, {});
+    assert.equal(restored.status, 200);
+    const back = restored.json as {
+      status: string;
+      outcome: string | null;
+      completedAt: string | null;
+      cancelledAt: string | null;
+    };
+    assert.equal(back.status, "open");
+    assert.equal(back.outcome, null);
+    assert.equal(back.completedAt, null);
+    assert.equal(back.cancelledAt, null);
+    const audit = await call(fixture.secret, "GET", `/tasks?teamId=${fixture.team.id}&status=cancelled`);
+    assert.equal((audit.json as { tasks: { id: string }[] }).tasks.some((row) => row.id === id), false);
+  });
+
   test("bot owners may omit waitingOn, and do-immediately follows the caller", async () => {
     const fixture = await seed();
     const cookie = cookieFor(fixture.user.id);
