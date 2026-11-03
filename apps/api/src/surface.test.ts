@@ -284,6 +284,7 @@ describe("task surface", { concurrency: 1 }, () => {
       "one next action",
       "one or two lines",
       "clear title",
+      "not in details or source",
       "private to James",
       "one short sentence",
     ]) {

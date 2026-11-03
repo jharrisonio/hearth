@@ -1,4 +1,4 @@
-import { Settings } from "lucide-react";
+import { Pencil, Settings } from "lucide-react";
 import { cn } from "@/lib/cn";
 
 /** 44px hit target. Glyphs sit inside, larger than the old 16px sun. */
@@ -7,6 +7,10 @@ export const iconButtonClass =
 
 export function GearIcon({ className }: { className?: string }) {
   return <Settings aria-hidden strokeWidth={1.5} className={cn("size-6", className)} />;
+}
+
+export function PencilIcon({ className }: { className?: string }) {
+  return <Pencil aria-hidden strokeWidth={1.5} className={cn("size-3.5", className)} />;
 }
 
 export function CloseIcon() {

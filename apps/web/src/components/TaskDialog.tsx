@@ -19,6 +19,7 @@ import {
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { CatalogPicker } from "@/components/CatalogPicker";
 import { DeleteDialog } from "@/components/DeleteDialog";
+import { PencilIcon } from "@/components/Icons";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { actionLabel, axesFor } from "@/lib/action";
@@ -390,7 +391,6 @@ function TaskForm({
     }
   }
 
-  const previewHref = isHttpUrl(sourceHref.trim()) ? sourceHref.trim() : null;
   const calendarLink = action === "schedule" ? calendarHref(calendarEventId) : null;
   const showCheckIn =
     task?.status === "open" &&
@@ -511,61 +511,22 @@ function TaskForm({
         Detail
         <textarea className={cn(fieldClass, "resize-y")} rows={3} value={detail} onChange={(event) => setDetail(event.target.value)} />
       </label>
-      {task ? <TaskLinks taskId={task.id} initial={task.links} onSaved={onSaved} /> : null}
-      <label className={labelClass}>
-        Source
-        <select
-          className={fieldClass}
-          value={sourceType}
-          onChange={(event) => {
-            const next = event.target.value as SourceType | "";
-            setSourceType(next);
-            if (!next) {
-              setSourceHref("");
-              setSourceLabel("");
-            }
-          }}
-        >
-          <option value="">None</option>
-          <option value="email">Email</option>
-          <option value="url">Link</option>
-        </select>
-      </label>
-      {sourceType ? (
-        <>
-          {previewHref ? (
-            <a
-              href={previewHref}
-              target="_blank"
-              rel="noreferrer noopener"
-              className="mt-3 inline-block max-w-full truncate text-[15px] font-light normal-case tracking-normal text-[#eee] underline decoration-[#333] underline-offset-[5px] hover:decoration-white"
-            >
-              {sourceLabel.trim() || (sourceType === "email" ? "Open email" : "Open link")}
-            </a>
-          ) : null}
-          <label className={labelClass}>
-            Link
-            <input
-              className={fieldClass}
-              type="url"
-              inputMode="url"
-              autoComplete="off"
-              placeholder={sourceType === "email" ? "https://mail.google.com/mail/u/0/#all/…" : "https://"}
-              value={sourceHref}
-              onChange={(event) => setSourceHref(event.target.value)}
-            />
-          </label>
-          <label className={labelClass}>
-            Label
-            <input
-              className={fieldClass}
-              value={sourceLabel}
-              placeholder={sourceType === "email" ? "Subject" : "Name"}
-              onChange={(event) => setSourceLabel(event.target.value)}
-            />
-          </label>
-        </>
-      ) : null}
+      <TaskLinks
+        taskId={task?.id ?? null}
+        initial={task?.links ?? []}
+        sourceType={sourceType}
+        sourceHref={sourceHref}
+        sourceLabel={sourceLabel}
+        onSourceType={setSourceType}
+        onSourceHref={setSourceHref}
+        onSourceLabel={setSourceLabel}
+        onClearSource={() => {
+          setSourceType("");
+          setSourceHref("");
+          setSourceLabel("");
+        }}
+        onSaved={onSaved}
+      />
       {task && task.status !== "open" && task.outcome ? (
         <p className="mt-6 text-[13px] text-[#a8a8a8]">
           {task.status === "cancelled" ? "Cancelled" : "Outcome"}: {task.outcome}
@@ -870,20 +831,53 @@ function ActionMatrix({ action, onSelect }: { action: Action; onSelect: (next: A
   );
 }
 
-function TaskLinks({ taskId, initial, onSaved }: { taskId: string; initial: AttachedLink[]; onSaved: () => void }) {
+function TaskLinks({
+  taskId,
+  initial,
+  sourceType,
+  sourceHref,
+  sourceLabel,
+  onSourceType,
+  onSourceHref,
+  onSourceLabel,
+  onClearSource,
+  onSaved,
+}: {
+  taskId: string | null;
+  initial: AttachedLink[];
+  sourceType: SourceType | "";
+  sourceHref: string;
+  sourceLabel: string;
+  onSourceType: (value: SourceType | "") => void;
+  onSourceHref: (value: string) => void;
+  onSourceLabel: (value: string) => void;
+  onClearSource: () => void;
+  onSaved: () => void;
+}) {
   const [links, setLinks] = useState(initial);
-  const [title, setTitle] = useState("");
-  const [url, setUrl] = useState("");
+  const [editingSource, setEditingSource] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editUrl, setEditUrl] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [addTitle, setAddTitle] = useState("");
+  const [addUrl, setAddUrl] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
-  const draftRef = useRef({ title: "", url: "" });
-  draftRef.current = { title, url };
-  const savedKey = useRef("");
+  const addRef = useRef({ title: "", url: "" });
+  addRef.current = { title: addTitle, url: addUrl };
+  const editRef = useRef({ id: null as string | null, title: "", url: "" });
+  editRef.current = { id: editingId, title: editTitle, url: editUrl };
+  const savedAdd = useRef("");
+  const savedEdit = useRef("");
   const onSavedRef = useRef(onSaved);
   onSavedRef.current = onSaved;
+  const sourceUrl = sourceHref.trim();
+  const sourceReady = Boolean(sourceType) && isHttpUrl(sourceUrl);
 
-  async function commit() {
-    const nextTitle = draftRef.current.title.trim();
-    const nextUrl = draftRef.current.url.trim();
+  async function commitAdd() {
+    if (!taskId) return;
+    const nextTitle = addRef.current.title.trim();
+    const nextUrl = addRef.current.url.trim();
     if (!nextTitle && !nextUrl) {
       setNotice(null);
       return;
@@ -897,42 +891,77 @@ function TaskLinks({ taskId, initial, onSaved }: { taskId: string; initial: Atta
       return;
     }
     const key = `${nextTitle}\n${nextUrl}`;
-    if (savedKey.current === key) return;
-    savedKey.current = key;
+    if (savedAdd.current === key) return;
+    savedAdd.current = key;
     setNotice(null);
     try {
       const link = await api.addTaskLink(taskId, { title: nextTitle, url: nextUrl });
-      if (draftRef.current.title.trim() !== nextTitle || draftRef.current.url.trim() !== nextUrl) {
-        savedKey.current = "";
+      if (addRef.current.title.trim() !== nextTitle || addRef.current.url.trim() !== nextUrl) {
+        savedAdd.current = "";
         return;
       }
-      setLinks((current) => {
-        const index = current.findIndex((row) => row.id === link.id);
-        if (index === -1) return [...current, link];
-        const next = current.slice();
-        next[index] = link;
-        return next;
-      });
-      setTitle("");
-      setUrl("");
-      savedKey.current = "";
+      setLinks((current) => (current.some((row) => row.id === link.id) ? current.map((row) => (row.id === link.id ? link : row)) : [...current, link]));
+      setAddTitle("");
+      setAddUrl("");
+      setAdding(false);
+      savedAdd.current = "";
       onSavedRef.current();
     } catch (err) {
-      savedKey.current = key;
+      savedAdd.current = key;
       setNotice(err instanceof ApiError ? err.message : "Could not add the link.");
     }
   }
 
-  const commitRef = useRef(commit);
-  commitRef.current = commit;
+  async function commitEdit() {
+    if (!taskId) return;
+    const id = editRef.current.id;
+    const nextTitle = editRef.current.title.trim();
+    const nextUrl = editRef.current.url.trim();
+    if (!id) return;
+    if (!nextTitle || !isHttpUrl(nextUrl)) {
+      setNotice(!nextTitle ? "A link needs a title." : "Link needs an http(s) URL.");
+      return;
+    }
+    const key = `${id}\n${nextTitle}\n${nextUrl}`;
+    if (savedEdit.current === key) return;
+    savedEdit.current = key;
+    setNotice(null);
+    try {
+      const link = await api.updateTaskLink(taskId, id, { title: nextTitle, url: nextUrl });
+      setLinks((current) => current.map((row) => (row.id === link.id ? link : row)));
+      onSavedRef.current();
+    } catch (err) {
+      savedEdit.current = "";
+      setNotice(err instanceof ApiError ? err.message : "Could not save the link.");
+    }
+  }
 
   useEffect(() => {
-    const timer = window.setTimeout(() => void commitRef.current(), 500);
+    if (!adding) return;
+    const timer = window.setTimeout(() => void commitAdd(), 500);
     return () => window.clearTimeout(timer);
-  }, [title, url]);
+  }, [adding, addTitle, addUrl]);
+
+  useEffect(() => {
+    if (!editingId) return;
+    const timer = window.setTimeout(() => void commitEdit(), 500);
+    return () => window.clearTimeout(timer);
+  }, [editingId, editTitle, editUrl]);
+
+  function openEdit(link: AttachedLink) {
+    setEditingSource(false);
+    setAdding(false);
+    setEditingId(link.id);
+    setEditTitle(link.title);
+    setEditUrl(link.url);
+    savedEdit.current = `${link.id}\n${link.title}\n${link.url}`;
+    setNotice(null);
+  }
 
   async function remove(link: AttachedLink) {
+    if (!taskId) return;
     setLinks((current) => current.filter((row) => row.id !== link.id));
+    if (editingId === link.id) setEditingId(null);
     try {
       await api.removeTaskLink(taskId, link.id);
       onSavedRef.current();
@@ -943,66 +972,209 @@ function TaskLinks({ taskId, initial, onSaved }: { taskId: string; initial: Atta
   }
 
   function onKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (event.key !== "Enter") return;
-    event.preventDefault();
-    savedKey.current = "";
-    void commitRef.current();
+    if (event.key === "Enter") event.preventDefault();
   }
+
+  if (!taskId && !sourceType) return null;
 
   return (
     <div>
       <p className={labelClass}>Links</p>
-      {links.length > 0 ? (
-        <ul>
-          {links.map((link) =>
-            isHttpUrl(link.url) ? (
-              <li key={link.id} className="flex items-baseline justify-between gap-4 py-2">
+      <ul>
+        {sourceType ? (
+          <li className="py-1">
+            <div className="flex items-center gap-1">
+              {sourceReady ? (
                 <a
-                  href={link.url}
+                  href={sourceUrl}
                   target="_blank"
                   rel="noopener"
-                  className="min-w-0 truncate text-[15px] font-light normal-case tracking-normal text-[#eee] underline decoration-[#333] underline-offset-[5px] hover:decoration-white"
+                  className="min-w-0 flex-1 py-2 text-[15px] font-light leading-snug text-[#eee] underline decoration-[#333] underline-offset-[5px] hover:decoration-white"
                 >
-                  {link.title}
+                  {friendlyLinkName(sourceLabel, sourceUrl)}
                 </a>
+              ) : (
+                <span className="min-w-0 flex-1 py-2 text-[15px] font-light text-[#a8a8a8]">
+                  {sourceLabel.trim() || "Link"}
+                </span>
+              )}
+              <button
+                type="button"
+                aria-label="Edit source link"
+                aria-pressed={editingSource}
+                className="inline-flex size-8 shrink-0 items-center justify-center text-[#a8a8a8] hover:text-white"
+                onClick={() => {
+                  setEditingId(null);
+                  setAdding(false);
+                  setEditingSource((open) => !open);
+                }}
+              >
+                <PencilIcon />
+              </button>
+              <button
+                type="button"
+                aria-label="Remove source link"
+                className="shrink-0 px-1 py-2 text-[10px] font-normal uppercase tracking-[0.22em] text-[#a8a8a8] hover:text-white"
+                onClick={() => {
+                  setEditingSource(false);
+                  onClearSource();
+                }}
+              >
+                Remove
+              </button>
+            </div>
+            {editingSource ? (
+              <div>
+                <input
+                  className={fieldClass}
+                  aria-label="Source title"
+                  placeholder="Title"
+                  value={sourceLabel}
+                  onChange={(event) => onSourceLabel(event.target.value)}
+                  onKeyDown={onKeyDown}
+                />
+                <input
+                  className={fieldClass}
+                  type="url"
+                  inputMode="url"
+                  aria-label="Source URL"
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder={sourceType === "email" ? "https://mail.google.com/mail/u/0/#all/…" : "https://"}
+                  value={sourceHref}
+                  onChange={(event) => onSourceHref(event.target.value)}
+                  onKeyDown={onKeyDown}
+                />
+                <select
+                  className={fieldClass}
+                  aria-label="Source type"
+                  value={sourceType}
+                  onChange={(event) => onSourceType(event.target.value as SourceType)}
+                >
+                  <option value="email">Email</option>
+                  <option value="url">Link</option>
+                </select>
+              </div>
+            ) : null}
+          </li>
+        ) : null}
+        {links.map((link) => {
+          const name = friendlyLinkName(link.title, link.url);
+          const open = isHttpUrl(link.url);
+          return (
+            <li key={link.id} className="py-1">
+              <div className="flex items-center gap-1">
+                {open ? (
+                  <a
+                    href={link.url}
+                    target="_blank"
+                    rel="noopener"
+                    className="min-w-0 flex-1 py-2 text-[15px] font-light leading-snug text-[#eee] underline decoration-[#333] underline-offset-[5px] hover:decoration-white"
+                  >
+                    {name}
+                  </a>
+                ) : (
+                  <span className="min-w-0 flex-1 py-2 text-[15px] font-light text-[#a8a8a8]">{name}</span>
+                )}
                 <button
                   type="button"
-                  className="shrink-0 py-1 text-[10px] font-normal uppercase tracking-[0.28em] text-[#a8a8a8] transition-colors duration-150 hover:text-white"
-                  aria-label={`Remove ${link.title}`}
+                  aria-label={`Edit ${name}`}
+                  aria-pressed={editingId === link.id}
+                  className="inline-flex size-8 shrink-0 items-center justify-center text-[#a8a8a8] hover:text-white"
+                  onClick={() => (editingId === link.id ? setEditingId(null) : openEdit(link))}
+                >
+                  <PencilIcon />
+                </button>
+                <button
+                  type="button"
+                  aria-label={`Remove ${name}`}
+                  className="shrink-0 px-1 py-2 text-[10px] font-normal uppercase tracking-[0.22em] text-[#a8a8a8] hover:text-white"
                   onClick={() => void remove(link)}
                 >
                   Remove
                 </button>
-              </li>
-            ) : null,
-          )}
-        </ul>
+              </div>
+              {editingId === link.id ? (
+                <div>
+                  <input
+                    className={fieldClass}
+                    aria-label="Link title"
+                    placeholder="Title"
+                    value={editTitle}
+                    onChange={(event) => setEditTitle(event.target.value)}
+                    onKeyDown={onKeyDown}
+                  />
+                  <input
+                    className={fieldClass}
+                    type="url"
+                    inputMode="url"
+                    aria-label="Link URL"
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder="https://"
+                    value={editUrl}
+                    onChange={(event) => setEditUrl(event.target.value)}
+                    onKeyDown={onKeyDown}
+                  />
+                </div>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+      {taskId ? (
+        adding ? (
+          <div>
+            <input
+              className={fieldClass}
+              aria-label="New link title"
+              placeholder="Title"
+              value={addTitle}
+              autoFocus
+              onChange={(event) => setAddTitle(event.target.value)}
+              onKeyDown={onKeyDown}
+            />
+            <input
+              className={fieldClass}
+              type="url"
+              inputMode="url"
+              aria-label="New link URL"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="https://"
+              value={addUrl}
+              onChange={(event) => setAddUrl(event.target.value)}
+              onKeyDown={onKeyDown}
+            />
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="mt-2 py-2 text-[15px] font-light text-[#a8a8a8] hover:text-white"
+            onClick={() => {
+              setEditingSource(false);
+              setEditingId(null);
+              setAdding(true);
+              setNotice(null);
+            }}
+          >
+            + Add link
+          </button>
+        )
       ) : null}
-      <input
-        className={fieldClass}
-        value={title}
-        placeholder="Title"
-        aria-label="Link title"
-        autoComplete="off"
-        onChange={(event) => setTitle(event.target.value)}
-        onKeyDown={onKeyDown}
-      />
-      <input
-        className={fieldClass}
-        type="url"
-        inputMode="url"
-        value={url}
-        placeholder="https://"
-        aria-label="Link URL"
-        spellCheck={false}
-        autoCapitalize="off"
-        autoComplete="off"
-        onChange={(event) => setUrl(event.target.value)}
-        onKeyDown={onKeyDown}
-      />
       {notice ? <p className="mt-2 text-[13px] text-[#c9a35a]">{notice}</p> : null}
     </div>
   );
+}
+
+function friendlyLinkName(title: string | null | undefined, url: string) {
+  const name = title?.trim();
+  if (name) return name;
+  try {
+    return new URL(url).hostname.replace(/^www\./, "") || url;
+  } catch {
+    return url;
+  }
 }
 
 function keepCatalogOpen(event: { target: EventTarget | null; preventDefault: () => void }) {
