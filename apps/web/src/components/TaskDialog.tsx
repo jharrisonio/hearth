@@ -14,11 +14,12 @@ import {
   type Task,
   type TaskLink,
   type TaskSource,
+  type TaskStatus,
   type UpdateTaskInput,
 } from "@hearth/shared";
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { CatalogPicker } from "@/components/CatalogPicker";
-import { DeleteDialog } from "@/components/DeleteDialog";
+import { Chips } from "@/components/Chips";
 import { PencilIcon } from "@/components/Icons";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -38,7 +39,6 @@ export function TaskDialog({
   onOpenProject,
   onClose,
   onSaved,
-  onComplete,
 }: {
   open: boolean;
   layer?: "base" | "front";
@@ -49,7 +49,6 @@ export function TaskDialog({
   onOpenProject: (projectId: string) => void;
   onClose: () => void;
   onSaved: () => void;
-  onComplete: (task: Task) => void;
 }) {
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
@@ -70,7 +69,6 @@ export function TaskDialog({
             onOpenProject={onOpenProject}
             onClose={onClose}
             onSaved={onSaved}
-            onComplete={onComplete}
           />
         ) : null}
       </DialogContent>
@@ -86,7 +84,6 @@ function TaskForm({
   onOpenProject,
   onClose,
   onSaved,
-  onComplete,
 }: {
   teamId: string;
   task: Task | null;
@@ -95,7 +92,6 @@ function TaskForm({
   onOpenProject: (projectId: string) => void;
   onClose: () => void;
   onSaved: () => void;
-  onComplete: (task: Task) => void;
 }) {
   const seeded = task ? { important: task.important, urgent: task.urgent } : axesFor(defaultAction);
   const [members, setMembers] = useState<Member[]>([]);
@@ -120,8 +116,14 @@ function TaskForm({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
-  const [cancelling, setCancelling] = useState(false);
+  const [status, setStatus] = useState<TaskStatus>(task?.status ?? "open");
+  const [recordedOutcome, setRecordedOutcome] = useState(task?.outcome ?? null);
+  const [ask, setAsk] = useState<Extract<TaskStatus, "done" | "cancelled"> | null>(null);
+  const [outcomeDraft, setOutcomeDraft] = useState("");
+  const [outcomeError, setOutcomeError] = useState<string | null>(null);
+  const [statusBusy, setStatusBusy] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const parsedOwner = parseOwnerKey(owner);
   const waitingRequired = delegateRequiresWaitingOn(action, parsedOwner);
   const ownerChoices = new Set([
@@ -321,23 +323,98 @@ function TaskForm({
     owner,
   ]);
 
-  async function onCancelTask() {
-    if (!task || cancelling) return;
-    setCancelling(true);
-    setError(null);
+  function chooseStatus(next: TaskStatus) {
+    if (!task || statusBusy) return;
+    setOutcomeError(null);
+    if (next === status) {
+      setAsk(null);
+      setOutcomeDraft("");
+      return;
+    }
+    if (next === "open") {
+      setAsk(null);
+      setOutcomeDraft("");
+      void applyOpen();
+      return;
+    }
+    setAsk(next);
+    setOutcomeDraft("");
+  }
+
+  async function applyOpen() {
+    if (!task || statusBusy) return;
+    setStatusBusy(true);
+    setOutcomeError(null);
     const savedOk = await commitRef.current();
     if (!savedOk) {
-      setCancelling(false);
+      setStatusBusy(false);
       return;
     }
     try {
-      await api.cancelTask(task.id, "cancelled");
+      const next = await api.reopenTask(task.id);
+      setStatus(next.status);
+      setRecordedOutcome(next.outcome);
+      onSaved();
+    } catch (err) {
+      setOutcomeError(err instanceof ApiError ? err.message : "Could not reopen the task.");
+    } finally {
+      setStatusBusy(false);
+    }
+  }
+
+  async function applyClosed(event: React.FormEvent) {
+    event.preventDefault();
+    if (!task || !ask || statusBusy) return;
+    const sentence = outcomeDraft.trim();
+    if (!sentence) {
+      setOutcomeError("Write one sentence.");
+      return;
+    }
+    setStatusBusy(true);
+    setOutcomeError(null);
+    const savedOk = await commitRef.current();
+    if (!savedOk) {
+      setStatusBusy(false);
+      return;
+    }
+    let movedToOpen = false;
+    try {
+      if (status !== "open") {
+        const opened = await api.reopenTask(task.id);
+        movedToOpen = true;
+        setStatus(opened.status);
+        setRecordedOutcome(opened.outcome);
+      }
+      const next = ask === "done" ? await api.completeTask(task.id, sentence) : await api.cancelTask(task.id, sentence);
+      setStatus(next.status);
+      setRecordedOutcome(next.outcome);
+      setAsk(null);
+      setOutcomeDraft("");
+      onSaved();
+    } catch (err) {
+      if (movedToOpen) {
+        setAsk(null);
+        setOutcomeDraft("");
+      }
+      setOutcomeError(err instanceof ApiError ? err.message : "Could not update the status.");
+      onSaved();
+    } finally {
+      setStatusBusy(false);
+    }
+  }
+
+  async function onDelete() {
+    if (!task || deleting) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      await api.deleteTask(task.id);
       skipFlushRef.current = true;
       onSaved();
       onClose();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not cancel the task.");
-      setCancelling(false);
+      setError(err instanceof ApiError ? err.message : "Could not delete the task.");
+      setDeleting(false);
     }
   }
 
@@ -347,7 +424,7 @@ function TaskForm({
       await commitRef.current();
       return;
     }
-    if (saving || cancelling) return;
+    if (saving || statusBusy || deleting) return;
     if (!draft.title || !draft.owner) {
       setError(draft.title ? "Choose an owner." : "A task needs a title.");
       return;
@@ -393,26 +470,75 @@ function TaskForm({
 
   const calendarLink = action === "schedule" ? calendarHref(calendarEventId) : null;
   const showCheckIn =
-    task?.status === "open" &&
-    action === "schedule" &&
-    needsCheckIn({ status: "open", action, dueAt: fromLocalInput(dueAt) });
+    status === "open" && action === "schedule" && needsCheckIn({ status: "open", action, dueAt: fromLocalInput(dueAt) });
   const saveLabel = saveState === "saving" ? "Saving" : saveState === "saved" ? "Saved" : "";
 
   return (
     <form className="flex min-h-0 flex-1 flex-col" onSubmit={(event) => void onSubmit(event)}>
       <header className="shrink-0 px-7 pt-[env(safe-area-inset-top)]">
-        <div className="flex h-16 items-center">
+        <div className="grid h-16 grid-cols-[minmax(0,1fr)_auto_44px] items-center">
           <DialogTitle className="mb-0">{task ? "Task" : "New task"}</DialogTitle>
+          {task && saveLabel ? (
+            <p className="px-3 text-[10px] font-normal uppercase tracking-[0.32em] text-[#a8a8a8]" aria-live="polite">
+              {saveLabel}
+            </p>
+          ) : (
+            <span />
+          )}
+          <span />
         </div>
       </header>
+      {error ? <p className="px-7 pb-2 text-[13px] text-[#c9a35a]">{error}</p> : null}
       <DialogDescription className="sr-only">
         Set the action on the matrix. Important and urgent are the axis titles.
       </DialogDescription>
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-7 pb-8 pt-4">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-7 pb-[calc(2rem+env(safe-area-inset-bottom))] pt-4">
       <label className={labelClass}>
         Title
         <input className={fieldClass} value={title} onChange={(event) => setTitle(event.target.value)} autoFocus required />
       </label>
+      {task ? (
+        <div>
+          <p className={labelClass}>Status</p>
+          <Chips
+            label="Status"
+            value={ask ?? status}
+            options={statusOptions}
+            onChange={chooseStatus}
+            disabled={statusBusy}
+          />
+          {ask ? (
+            <div>
+              <label className={labelClass}>
+                Outcome
+                <textarea
+                  className={cn(fieldClass, "resize-y")}
+                  rows={2}
+                  value={outcomeDraft}
+                  placeholder="One sentence."
+                  onChange={(event) => setOutcomeDraft(event.target.value)}
+                  autoFocus
+                  required
+                />
+              </label>
+              {outcomeError ? <p className="mt-3 text-[13px] text-[#c9a35a]">{outcomeError}</p> : null}
+              <div className="mt-6 flex items-center justify-end gap-7">
+                <Button type="button" variant="ghost" onClick={() => chooseStatus(status)} disabled={statusBusy}>
+                  Keep
+                </Button>
+                <Button type="button" variant="solid" onClick={(event) => void applyClosed(event)} disabled={statusBusy}>
+                  {statusBusy ? "Saving…" : ask === "done" ? "Mark done" : "Mark cancelled"}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <>
+              {status !== "open" && recordedOutcome ? <p className={hintClass}>{recordedOutcome}</p> : null}
+              {outcomeError ? <p className="mt-3 text-[13px] text-[#c9a35a]">{outcomeError}</p> : null}
+            </>
+          )}
+        </div>
+      ) : null}
       <ActionMatrix action={action} onSelect={selectAction} />
       {action === "delegate" ? (
         <>
@@ -527,65 +653,39 @@ function TaskForm({
         }}
         onSaved={onSaved}
       />
-      {task && task.status !== "open" && task.outcome ? (
-        <p className="mt-6 text-[13px] text-[#a8a8a8]">
-          {task.status === "cancelled" ? "Cancelled" : "Outcome"}: {task.outcome}
-        </p>
+      {task ? (
+        <section className="mt-16 border-t border-[#1c1c1c] pt-8">
+          <h2 className="text-[10px] font-normal uppercase tracking-[0.32em] text-[#a8a8a8]">Danger zone</h2>
+          <p className={hintClass}>Delete removes this task. It does not stay for audit. Cancelled keeps the history.</p>
+          {confirmingDelete ? (
+            <div className="mt-6">
+              <p className="text-[15px] font-light text-[#d6d6d6]">Delete this task?</p>
+              <div className="mt-6 flex items-center gap-7">
+                <Button type="button" variant="ghost" onClick={() => setConfirmingDelete(false)} disabled={deleting}>
+                  Keep
+                </Button>
+                <Button type="button" variant="solid" onClick={() => void onDelete()} disabled={deleting}>
+                  {deleting ? "Deleting…" : "Delete"}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <Button type="button" className="mt-6" onClick={() => setConfirmingDelete(true)} disabled={deleting || statusBusy}>
+              Delete
+            </Button>
+          )}
+        </section>
       ) : null}
       </div>
-      <footer className="relative z-10 shrink-0 bg-black px-7 pb-[calc(26px+env(safe-area-inset-bottom))] pt-6 before:pointer-events-none before:absolute before:inset-x-0 before:-top-10 before:h-10 before:bg-gradient-to-b before:from-transparent before:to-black before:content-['']">
-        {error ? <p className="mb-4 text-[13px] text-[#c9a35a]">{error}</p> : null}
-        {task && saveLabel ? (
-          <p className="mb-4 text-center text-[10px] font-normal uppercase tracking-[0.32em] text-[#a8a8a8]" aria-live="polite">
-            {saveLabel}
-          </p>
-        ) : null}
-        <div className="flex flex-wrap items-center justify-between gap-x-7 gap-y-4">
-          <div className="flex items-center gap-7">
-            {task ? (
-              <Button type="button" variant="ghost" onClick={() => setConfirmingDelete(true)} disabled={cancelling}>
-                Delete
-              </Button>
-            ) : null}
-            {task && task.status === "open" ? (
-              <Button type="button" variant="ghost" onClick={() => void onCancelTask()} disabled={cancelling}>
-                {cancelling ? "Cancelling…" : "Cancel"}
-              </Button>
-            ) : null}
+      {task ? null : (
+        <footer className="relative z-10 shrink-0 bg-black px-7 pb-[calc(26px+env(safe-area-inset-bottom))] pt-6 before:pointer-events-none before:absolute before:inset-x-0 before:-top-10 before:h-10 before:bg-gradient-to-b before:from-transparent before:to-black before:content-['']">
+          <div className="flex items-center justify-end">
+            <Button type="submit" variant="solid" disabled={saving}>
+              {saving ? "Saving…" : "Add"}
+            </Button>
           </div>
-          <div className="flex items-center gap-7">
-            {task ? null : (
-              <Button type="submit" variant="solid" disabled={saving}>
-                {saving ? "Saving…" : "Add"}
-              </Button>
-            )}
-            {task && task.status === "open" ? (
-              <Button
-                type="button"
-                variant="solid"
-                onClick={() => {
-                  void (async () => {
-                    const ok = await commitRef.current();
-                    onComplete(ok && title.trim() ? { ...task, title: title.trim() } : task);
-                  })();
-                }}
-                disabled={cancelling}
-              >
-                Complete
-              </Button>
-            ) : null}
-          </div>
-        </div>
-      </footer>
-      <DeleteDialog
-        task={confirmingDelete && task ? task : null}
-        onClose={() => setConfirmingDelete(false)}
-        onDeleted={() => {
-          skipFlushRef.current = true;
-          onSaved();
-          onClose();
-        }}
-      />
+        </footer>
+      )}
     </form>
   );
 }
@@ -778,6 +878,12 @@ async function createLink<T extends { id: string; name: string }>(
     throw err;
   }
 }
+
+const statusOptions: readonly { value: TaskStatus; label: string }[] = [
+  { value: "open", label: "Open" },
+  { value: "done", label: "Done" },
+  { value: "cancelled", label: "Cancelled" },
+];
 
 const matrixRows: readonly (readonly Action[])[] = [
   ["do_now", "schedule"],

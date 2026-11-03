@@ -170,7 +170,7 @@ taskRoutes.patch("/:id", async (c) => {
     throw new HttpError(
       400,
       "status_immutable",
-      "Status cannot be changed here. Complete the task with POST /tasks/:id/complete, or cancel it with POST /tasks/:id/cancel.",
+      "Status cannot be changed here. Complete the task with POST /tasks/:id/complete, cancel it with POST /tasks/:id/cancel, or reopen it with POST /tasks/:id/reopen.",
     );
   }
   for (const key of Object.keys(raw)) {
@@ -291,6 +291,35 @@ taskRoutes.post("/:id/cancel", async (c) => {
   const task = await loadTaskView(row.id);
   if (!task) throw new HttpError(404, "not_found", "Task not found.");
   await publishTaskEvent("cancelled", task);
+  return c.json(task);
+});
+
+taskRoutes.post("/:id/reopen", async (c) => {
+  const id = c.req.param("id");
+  requireUuid(id, "id");
+  const existing = await loadTask(id);
+  await requireTeam(c.get("actor"), existing.teamId);
+  if (existing.status === "open") {
+    const task = await loadTaskView(id);
+    if (!task) throw new HttpError(404, "not_found", "Task not found.");
+    return c.json(task);
+  }
+  const now = new Date();
+  const [row] = await db
+    .update(tasks)
+    .set({
+      status: "open",
+      outcome: null,
+      completedAt: null,
+      cancelledAt: null,
+      updatedAt: now,
+    })
+    .where(eq(tasks.id, id))
+    .returning();
+  if (!row) throw new HttpError(404, "not_found", "Task not found.");
+  const task = await loadTaskView(row.id);
+  if (!task) throw new HttpError(404, "not_found", "Task not found.");
+  await publishTaskEvent("updated", task);
   return c.json(task);
 });
 
