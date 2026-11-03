@@ -287,6 +287,10 @@ describe("task surface", { concurrency: 1 }, () => {
       "not in details or source",
       "private to James",
       "one short sentence",
+      "Delegated tasks",
+      "short status summary",
+      "numbered instructions",
+      "keep them current",
     ]) {
       assert.match(instructions, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     }
