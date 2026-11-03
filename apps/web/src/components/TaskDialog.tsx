@@ -8,6 +8,7 @@ import {
   type AreaSummary,
   type BotSummary,
   type Member,
+  type AttachedLink,
   type ProjectSummary,
   type SourceType,
   type Task,
@@ -510,6 +511,7 @@ function TaskForm({
         Detail
         <textarea className={cn(fieldClass, "resize-y")} rows={3} value={detail} onChange={(event) => setDetail(event.target.value)} />
       </label>
+      {task ? <TaskLinks taskId={task.id} initial={task.links} onSaved={onSaved} /> : null}
       <label className={labelClass}>
         Source
         <select
@@ -864,6 +866,141 @@ function ActionMatrix({ action, onSelect }: { action: Action; onSelect: (next: A
           })}
         </div>
       </div>
+    </div>
+  );
+}
+
+function TaskLinks({ taskId, initial, onSaved }: { taskId: string; initial: AttachedLink[]; onSaved: () => void }) {
+  const [links, setLinks] = useState(initial);
+  const [title, setTitle] = useState("");
+  const [url, setUrl] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
+  const draftRef = useRef({ title: "", url: "" });
+  draftRef.current = { title, url };
+  const savedKey = useRef("");
+  const onSavedRef = useRef(onSaved);
+  onSavedRef.current = onSaved;
+
+  async function commit() {
+    const nextTitle = draftRef.current.title.trim();
+    const nextUrl = draftRef.current.url.trim();
+    if (!nextTitle && !nextUrl) {
+      setNotice(null);
+      return;
+    }
+    if (!isHttpUrl(nextUrl)) {
+      setNotice(nextUrl ? "Link needs an http(s) URL." : null);
+      return;
+    }
+    if (!nextTitle) {
+      setNotice("A link needs a title.");
+      return;
+    }
+    const key = `${nextTitle}\n${nextUrl}`;
+    if (savedKey.current === key) return;
+    savedKey.current = key;
+    setNotice(null);
+    try {
+      const link = await api.addTaskLink(taskId, { title: nextTitle, url: nextUrl });
+      if (draftRef.current.title.trim() !== nextTitle || draftRef.current.url.trim() !== nextUrl) {
+        savedKey.current = "";
+        return;
+      }
+      setLinks((current) => {
+        const index = current.findIndex((row) => row.id === link.id);
+        if (index === -1) return [...current, link];
+        const next = current.slice();
+        next[index] = link;
+        return next;
+      });
+      setTitle("");
+      setUrl("");
+      savedKey.current = "";
+      onSavedRef.current();
+    } catch (err) {
+      savedKey.current = key;
+      setNotice(err instanceof ApiError ? err.message : "Could not add the link.");
+    }
+  }
+
+  const commitRef = useRef(commit);
+  commitRef.current = commit;
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void commitRef.current(), 500);
+    return () => window.clearTimeout(timer);
+  }, [title, url]);
+
+  async function remove(link: AttachedLink) {
+    setLinks((current) => current.filter((row) => row.id !== link.id));
+    try {
+      await api.removeTaskLink(taskId, link.id);
+      onSavedRef.current();
+    } catch (err) {
+      setLinks((current) => (current.some((row) => row.id === link.id) ? current : [...current, link]));
+      setNotice(err instanceof ApiError ? err.message : "Could not remove the link.");
+    }
+  }
+
+  function onKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    savedKey.current = "";
+    void commitRef.current();
+  }
+
+  return (
+    <div>
+      <p className={labelClass}>Links</p>
+      {links.length > 0 ? (
+        <ul>
+          {links.map((link) =>
+            isHttpUrl(link.url) ? (
+              <li key={link.id} className="flex items-baseline justify-between gap-4 py-2">
+                <a
+                  href={link.url}
+                  target="_blank"
+                  rel="noopener"
+                  className="min-w-0 truncate text-[15px] font-light normal-case tracking-normal text-[#eee] underline decoration-[#333] underline-offset-[5px] hover:decoration-white"
+                >
+                  {link.title}
+                </a>
+                <button
+                  type="button"
+                  className="shrink-0 py-1 text-[10px] font-normal uppercase tracking-[0.28em] text-[#a8a8a8] transition-colors duration-150 hover:text-white"
+                  aria-label={`Remove ${link.title}`}
+                  onClick={() => void remove(link)}
+                >
+                  Remove
+                </button>
+              </li>
+            ) : null,
+          )}
+        </ul>
+      ) : null}
+      <input
+        className={fieldClass}
+        value={title}
+        placeholder="Title"
+        aria-label="Link title"
+        autoComplete="off"
+        onChange={(event) => setTitle(event.target.value)}
+        onKeyDown={onKeyDown}
+      />
+      <input
+        className={fieldClass}
+        type="url"
+        inputMode="url"
+        value={url}
+        placeholder="https://"
+        aria-label="Link URL"
+        spellCheck={false}
+        autoCapitalize="off"
+        autoComplete="off"
+        onChange={(event) => setUrl(event.target.value)}
+        onKeyDown={onKeyDown}
+      />
+      {notice ? <p className="mt-2 text-[13px] text-[#c9a35a]">{notice}</p> : null}
     </div>
   );
 }

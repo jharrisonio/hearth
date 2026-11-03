@@ -51,6 +51,34 @@ describe("task surface", { concurrency: 1 }, () => {
     assert.equal(has("projects", "area_id"), true);
     assert.equal(has("tasks", "sort_order"), true);
     assert.equal(has("areas", "notes"), false);
+    const linkColumns = await pool.query<{ column_name: string }>(
+      `select column_name from information_schema.columns
+       where table_schema = 'public' and table_name = 'task_links'`,
+    );
+    const linkNames = linkColumns.rows.map((row) => row.column_name);
+    for (const column of [
+      "id",
+      "task_id",
+      "title",
+      "url",
+      "created_by_type",
+      "created_by_id",
+      "position",
+      "created_at",
+      "updated_at",
+    ]) {
+      assert.ok(linkNames.includes(column), `task_links.${column} missing`);
+    }
+    const cascade = await pool.query<{ def: string }>(
+      `select pg_get_constraintdef(oid) as def from pg_constraint
+       where conrelid = 'task_links'::regclass and contype = 'f'`,
+    );
+    assert.match(cascade.rows.map((row) => row.def).join(" "), /ON DELETE CASCADE/i);
+    const linkIndexes = await pool.query<{ indexname: string }>(
+      `select indexname from pg_indexes where schemaname = 'public' and tablename = 'task_links'`,
+    );
+    const indexNames = linkIndexes.rows.map((row) => row.indexname);
+    assert.ok(indexNames.includes("task_links_task_id_idx"), "task_links index on task_id missing");
   });
 
   beforeEach(async () => {
@@ -254,6 +282,10 @@ describe("task surface", { concurrency: 1 }, () => {
       "hard delete",
       "still open",
       "one next action",
+      "one or two lines",
+      "clear title",
+      "private to James",
+      "one short sentence",
     ]) {
       assert.match(instructions, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     }
@@ -263,6 +295,7 @@ describe("task surface", { concurrency: 1 }, () => {
     const listedTools = (rpcResult(listed.json) as { tools: { name: string; description?: string }[] }).tools;
     const tools = listedTools.map((tool) => tool.name).sort();
     assert.deepEqual(tools, [
+      "add_task_link",
       "cancel_task",
       "complete_task",
       "create_area",
@@ -274,6 +307,7 @@ describe("task surface", { concurrency: 1 }, () => {
       "list_do_immediately",
       "list_projects",
       "list_tasks",
+      "remove_task_link",
       "update_project",
       "update_task",
     ]);
@@ -1384,6 +1418,121 @@ describe("task surface", { concurrency: 1 }, () => {
     assert.match(description("create_task"), /calendarEventId/);
     assert.match(description("list_do_immediately"), /check-in/);
   });
+
+  test("task links reject non-http URLs", async () => {
+    const fixture = await seed();
+    const created = await postTask(fixture.secret, { teamId: fixture.team.id, title: "Compare boilers" });
+    assert.equal(created.status, 201);
+    const task = taskBody(created.json);
+    assert.deepEqual(task.links, []);
+    const other = await seed();
+
+    for (const url of ["javascript:alert(1)", "ftp://example.com/file", "file:///tmp/x", "/notes", "https://"]) {
+      const rejected = await call(fixture.secret, "POST", `/tasks/${task.id}/links`, { title: "Notes", url });
+      assert.equal(rejected.status, 400, url);
+      assert.equal(errorBody(rejected.json).code, "invalid_body");
+    }
+
+    const denied = await call(other.secret, "POST", `/tasks/${task.id}/links`, {
+      title: "Notes",
+      url: "https://example.com/boilers",
+    });
+    assert.equal(denied.status, 403);
+
+    const added = await call(fixture.secret, "POST", `/tasks/${task.id}/links`, {
+      title: "  Boiler quotes  ",
+      url: "  https://example.com/boilers  ",
+    });
+    assert.equal(added.status, 201);
+    const link = linkBody(added.json);
+    assert.equal(link.title, "Boiler quotes");
+    assert.equal(link.url, "https://example.com/boilers");
+    assert.equal(link.position, 0);
+    assert.deepEqual(link.createdBy, { type: "bot", id: fixture.tokenId });
+
+    const patched = await call(fixture.secret, "PATCH", `/tasks/${task.id}/links/${link.id}`, {
+      url: "ftp://example.com/nope",
+    });
+    assert.equal(patched.status, 400);
+    const renamed = await call(fixture.secret, "PATCH", `/tasks/${task.id}/links/${link.id}`, { title: "Quotes" });
+    assert.equal(renamed.status, 200);
+    assert.equal(linkBody(renamed.json).title, "Quotes");
+
+    const listed = await call(fixture.secret, "GET", `/tasks?teamId=${fixture.team.id}`);
+    const found = (listed.json as { tasks: { id: string; links: { title: string }[] }[] }).tasks.find(
+      (row) => row.id === task.id,
+    );
+    assert.deepEqual(found?.links.map((row) => row.title), ["Quotes"]);
+  });
+
+  test("add_task_link is idempotent on task and url", async () => {
+    const fixture = await seed();
+    const created = await postTask(fixture.secret, { teamId: fixture.team.id, title: "Pick a fund" });
+    const task = taskBody(created.json);
+    const args = { taskId: task.id, title: "Fund comparison", url: "https://docs.example.com/funds" };
+    const first = linkBody(toolJson(await rpc(fixture.secret, "tools/call", { name: "add_task_link", arguments: args })));
+    const second = linkBody(
+      toolJson(
+        await rpc(fixture.secret, "tools/call", {
+          name: "add_task_link",
+          arguments: { ...args, title: "A different title" },
+        }),
+      ),
+    );
+    assert.equal(second.id, first.id);
+    assert.equal(second.title, "Fund comparison");
+    const count = await pool.query<{ n: number }>(`select count(*)::int as n from task_links where task_id = $1`, [
+      task.id,
+    ]);
+    assert.equal(count.rows[0]?.n, 1);
+
+    const read = toolJson(
+      await rpc(fixture.secret, "tools/call", { name: "list_tasks", arguments: { teamId: fixture.team.id } }),
+    ) as { tasks: { id: string; links: { id: string; url: string }[] }[] };
+    const row = read.tasks.find((item) => item.id === task.id);
+    assert.deepEqual(row?.links.map((link) => link.id), [first.id]);
+    assert.equal(row?.links[0]?.url, args.url);
+
+    const removed = toolJson(
+      await rpc(fixture.secret, "tools/call", {
+        name: "remove_task_link",
+        arguments: { taskId: task.id, linkId: first.id },
+      }),
+    ) as { id: string; deleted: boolean };
+    assert.equal(removed.deleted, true);
+    assert.equal(removed.id, first.id);
+    const after = await pool.query<{ n: number }>(`select count(*)::int as n from task_links where task_id = $1`, [
+      task.id,
+    ]);
+    assert.equal(after.rows[0]?.n, 0);
+  });
+
+  test("deleting a task cascades its links", async () => {
+    const fixture = await seed();
+    const created = await postTask(fixture.secret, { teamId: fixture.team.id, title: "Read the comparison" });
+    const task = taskBody(created.json);
+    const first = await call(fixture.secret, "POST", `/tasks/${task.id}/links`, {
+      title: "Page",
+      url: "https://example.com/page",
+    });
+    const second = await call(fixture.secret, "POST", `/tasks/${task.id}/links`, {
+      title: "Sheet",
+      url: "https://example.com/sheet",
+    });
+    assert.equal(first.status, 201);
+    assert.equal(second.status, 201);
+    const before = await pool.query<{ n: number }>(`select count(*)::int as n from task_links where task_id = $1`, [
+      task.id,
+    ]);
+    assert.equal(before.rows[0]?.n, 2);
+
+    const deleted = await call(fixture.secret, "DELETE", `/tasks/${task.id}`);
+    assert.equal(deleted.status, 200);
+    const after = await pool.query<{ n: number }>(`select count(*)::int as n from task_links where task_id = $1`, [
+      task.id,
+    ]);
+    assert.equal(after.rows[0]?.n, 0);
+  });
 });
 
 async function seed() {
@@ -1484,7 +1633,22 @@ function taskBody(json: unknown) {
   };
   assert.equal(typeof task.id, "string");
   assert.ok("source" in task, "task includes source");
-  return task;
+  assert.ok(Array.isArray((json as { links?: unknown }).links), "task includes links");
+  return task as typeof task & { links: { id: string; title: string; url: string }[] };
+}
+
+function linkBody(json: unknown) {
+  const link = json as {
+    id: string;
+    title: string;
+    url: string;
+    position: number;
+    createdBy: { type: string; id: string };
+  };
+  assert.equal(typeof link.id, "string");
+  assert.equal(typeof link.title, "string");
+  assert.equal(typeof link.url, "string");
+  return link;
 }
 
 function fullTask(json: unknown) {
