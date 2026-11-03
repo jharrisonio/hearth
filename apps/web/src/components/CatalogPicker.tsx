@@ -83,6 +83,7 @@ export function CatalogPicker({
   onCreate,
   onOpen,
   hint,
+  quiet = false,
 }: {
   label: string;
   emptyLabel: string;
@@ -94,6 +95,7 @@ export function CatalogPicker({
   onCreate: (name: string) => Promise<void>;
   onOpen?: (id: string) => void;
   hint?: string;
+  quiet?: boolean;
 }) {
   const labelId = useId();
   const listId = useId();
@@ -182,10 +184,17 @@ export function CatalogPicker({
 
   return (
     <div>
-      <span id={labelId} className={labelClass}>
-        {label}
-      </span>
-      <div ref={rowRef} className="flex items-center border-b border-[#262626]">
+      {quiet ? null : (
+        <span id={labelId} className={labelClass}>
+          {label}
+        </span>
+      )}
+      <div ref={rowRef} className={cn("flex items-center", quiet ? "min-h-11 gap-3 border-b border-[#161616]" : "border-b border-[#262626]")}>
+        {quiet ? (
+          <span id={labelId} className="w-24 shrink-0 text-[13px] font-light text-[#8a8a8a]">
+            {label}
+          </span>
+        ) : null}
         <button
           ref={triggerRef}
           type="button"
@@ -199,7 +208,7 @@ export function CatalogPicker({
             setOpen(true);
           }}
         >
-          <span className={cn("truncate text-[15px] font-light", selected ? "text-[#eee]" : "text-[#a8a8a8]")}>
+          <span className={cn("truncate text-[15px] font-light", selected ? "text-[#eee]" : quiet ? "text-[#6f6f6f]" : "text-[#a8a8a8]")}>
             {selected ? selected.name : emptyLabel}
           </span>
           {selected?.archivedAt ? (
@@ -217,7 +226,7 @@ export function CatalogPicker({
           </button>
         ) : null}
       </div>
-      {hint ? <p className={hintClass}>{hint}</p> : null}
+      {!quiet && hint ? <p className={hintClass}>{hint}</p> : null}
       {open && host && box
         ? createPortal(
             <>

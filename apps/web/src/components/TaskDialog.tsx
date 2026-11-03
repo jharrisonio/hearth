@@ -17,7 +17,7 @@ import {
   type TaskStatus,
   type UpdateTaskInput,
 } from "@hearth/shared";
-import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { CatalogPicker } from "@/components/CatalogPicker";
 import { Chips } from "@/components/Chips";
 import { PencilIcon } from "@/components/Icons";
@@ -55,8 +55,12 @@ export function TaskDialog({
       <DialogContent
         pinned
         layer={layer}
+        onOpenAutoFocus={task ? (event) => event.preventDefault() : undefined}
         onPointerDownOutside={keepCatalogOpen}
-        onFocusOutside={keepCatalogOpen}
+        onFocusOutside={(event) => {
+          keepCatalogOpen(event);
+          if (task) event.preventDefault();
+        }}
         onInteractOutside={keepCatalogOpen}
       >
         {open ? (
@@ -124,6 +128,7 @@ function TaskForm({
   const [statusBusy, setStatusBusy] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [panel, setPanel] = useState<PropertyPanel | null>(null);
   const parsedOwner = parseOwnerKey(owner);
   const waitingRequired = delegateRequiresWaitingOn(action, parsedOwner);
   const ownerChoices = new Set([
@@ -131,6 +136,15 @@ function TaskForm({
     ...bots.map((bot) => ownerKey("bot", bot.id)),
   ]);
   const keepCurrentOwner = ownersLoaded && task != null && !ownerChoices.has(owner);
+
+  useEffect(() => {
+    if (!task) return;
+    const frame = window.requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active !== document.body) active.blur();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [task]);
 
   useEffect(() => {
     let cancelled = false;
@@ -329,6 +343,7 @@ function TaskForm({
     if (next === status) {
       setAsk(null);
       setOutcomeDraft("");
+      setPanel(null);
       return;
     }
     if (next === "open") {
@@ -354,6 +369,7 @@ function TaskForm({
       const next = await api.reopenTask(task.id);
       setStatus(next.status);
       setRecordedOutcome(next.outcome);
+      setPanel(null);
       onSaved();
     } catch (err) {
       setOutcomeError(err instanceof ApiError ? err.message : "Could not reopen the task.");
@@ -362,7 +378,7 @@ function TaskForm({
     }
   }
 
-  async function applyClosed(event: React.FormEvent) {
+  async function applyClosed(event: { preventDefault: () => void }) {
     event.preventDefault();
     if (!task || !ask || statusBusy) return;
     const sentence = outcomeDraft.trim();
@@ -390,6 +406,7 @@ function TaskForm({
       setRecordedOutcome(next.outcome);
       setAsk(null);
       setOutcomeDraft("");
+      setPanel(null);
       onSaved();
     } catch (err) {
       if (movedToOpen) {
@@ -477,7 +494,7 @@ function TaskForm({
     <form className="flex min-h-0 flex-1 flex-col" onSubmit={(event) => void onSubmit(event)}>
       <header className="shrink-0 px-7 pt-[env(safe-area-inset-top)]">
         <div className="grid h-16 grid-cols-[minmax(0,1fr)_auto_44px] items-center">
-          <DialogTitle className="mb-0">{task ? "Task" : "New task"}</DialogTitle>
+          <DialogTitle className={task ? "sr-only" : "mb-0"}>{task ? title || "Task" : "New task"}</DialogTitle>
           {task && saveLabel ? (
             <p className="px-3 text-[10px] font-normal uppercase tracking-[0.32em] text-[#a8a8a8]" aria-live="polite">
               {saveLabel}
@@ -490,55 +507,78 @@ function TaskForm({
       </header>
       {error ? <p className="px-7 pb-2 text-[13px] text-[#c9a35a]">{error}</p> : null}
       <DialogDescription className="sr-only">
-        Set the action on the matrix. Important and urgent are the axis titles.
+        {task
+          ? "The title and detail can be edited in place. Other fields open when tapped."
+          : "Set the action on the matrix. Important and urgent are the axis titles."}
       </DialogDescription>
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-7 pb-[calc(2rem+env(safe-area-inset-bottom))] pt-4">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-7 pb-[calc(2rem+env(safe-area-inset-bottom))] pt-2">
+      {task ? (
+        <ExistingTaskBody
+          title={title}
+          detail={detail}
+          onTitle={setTitle}
+          onDetail={setDetail}
+          onCommit={() => void commitRef.current()}
+          status={status}
+          statusValue={ask ?? status}
+          statusBusy={statusBusy}
+          outcome={status !== "open" ? recordedOutcome : null}
+          ask={ask}
+          outcomeDraft={outcomeDraft}
+          outcomeError={outcomeError}
+          onOutcome={setOutcomeDraft}
+          onStatus={chooseStatus}
+          onKeepStatus={() => chooseStatus(status)}
+          onApplyStatus={(event) => void applyClosed(event)}
+          action={action}
+          onAction={(next) => {
+            selectAction(next);
+            setPanel(null);
+          }}
+          owner={owner}
+          ownerName={
+            members.find((member) => ownerKey("user", member.userId) === owner)?.name ??
+            bots.find((bot) => ownerKey("bot", bot.id) === owner)?.name ??
+            "Owner"
+          }
+          members={members}
+          bots={bots}
+          keepCurrentOwner={keepCurrentOwner}
+          onOwner={(next) => {
+            setOwner(next);
+            setPanel(null);
+          }}
+          projectId={projectId}
+          areaId={areaId}
+          projects={projects}
+          areas={areas}
+          onProject={setProjectId}
+          onArea={setAreaId}
+          onOpenProject={onOpenProject}
+          onCreateProject={(name) =>
+            createLink(name, (next) => api.createProject(teamId, { name: next }), setProjects, setProjectId, setError)
+          }
+          onCreateArea={(name) => createLink(name, (next) => api.createArea(teamId, next), setAreas, setAreaId, setError)}
+          waitingOn={waitingOn}
+          onWaitingOn={setWaitingOn}
+          waitingRequired={waitingRequired}
+          dueAt={dueAt}
+          onDueAt={setDueAt}
+          calendarEventId={calendarEventId}
+          onCalendar={setCalendarEventId}
+          calendarLink={calendarLink}
+          showCheckIn={showCheckIn}
+          panel={panel}
+          onPanel={setPanel}
+        />
+      ) : (
       <label className={labelClass}>
         Title
         <input className={fieldClass} value={title} onChange={(event) => setTitle(event.target.value)} autoFocus required />
       </label>
-      {task ? (
-        <div>
-          <p className={labelClass}>Status</p>
-          <Chips
-            label="Status"
-            value={ask ?? status}
-            options={statusOptions}
-            onChange={chooseStatus}
-            disabled={statusBusy}
-          />
-          {ask ? (
-            <div>
-              <label className={labelClass}>
-                Outcome
-                <textarea
-                  className={cn(fieldClass, "resize-y")}
-                  rows={2}
-                  value={outcomeDraft}
-                  placeholder="One sentence."
-                  onChange={(event) => setOutcomeDraft(event.target.value)}
-                  autoFocus
-                  required
-                />
-              </label>
-              {outcomeError ? <p className="mt-3 text-[13px] text-[#c9a35a]">{outcomeError}</p> : null}
-              <div className="mt-6 flex items-center justify-end gap-7">
-                <Button type="button" variant="ghost" onClick={() => chooseStatus(status)} disabled={statusBusy}>
-                  Keep
-                </Button>
-                <Button type="button" variant="solid" onClick={(event) => void applyClosed(event)} disabled={statusBusy}>
-                  {statusBusy ? "Saving…" : ask === "done" ? "Mark done" : "Mark cancelled"}
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <>
-              {status !== "open" && recordedOutcome ? <p className={hintClass}>{recordedOutcome}</p> : null}
-              {outcomeError ? <p className="mt-3 text-[13px] text-[#c9a35a]">{outcomeError}</p> : null}
-            </>
-          )}
-        </div>
-      ) : null}
+      )}
+      {task ? null : (
+      <>
       <ActionMatrix action={action} onSelect={selectAction} />
       {action === "delegate" ? (
         <>
@@ -637,6 +677,8 @@ function TaskForm({
         Detail
         <textarea className={cn(fieldClass, "resize-y")} rows={3} value={detail} onChange={(event) => setDetail(event.target.value)} />
       </label>
+      </>
+      )}
       <TaskLinks
         taskId={task?.id ?? null}
         initial={task?.links ?? []}
@@ -897,10 +939,18 @@ const matrixCue: Record<Action, string> = {
   later: "Neither",
 };
 
-function ActionMatrix({ action, onSelect }: { action: Action; onSelect: (next: Action) => void }) {
+function ActionMatrix({
+  action,
+  onSelect,
+  labelled = true,
+}: {
+  action: Action;
+  onSelect: (next: Action) => void;
+  labelled?: boolean;
+}) {
   return (
     <div>
-      <p className={labelClass}>Action</p>
+      {labelled ? <p className={labelClass}>Action</p> : null}
       <div role="group" aria-label="Action" className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-2.5">
         <div />
         <div className="grid grid-cols-2">
@@ -1285,4 +1335,516 @@ function friendlyLinkName(title: string | null | undefined, url: string) {
 
 function keepCatalogOpen(event: { target: EventTarget | null; preventDefault: () => void }) {
   if (event.target instanceof Element && event.target.closest("[data-catalog-popover]")) event.preventDefault();
+}
+
+type PropertyPanel = "status" | "action" | "owner" | "waiting" | "follow" | "when" | "calendar";
+
+const titleTextClass =
+  "block w-full whitespace-pre-wrap break-words border-0 bg-transparent p-0 text-left text-[26px] font-light leading-[1.25] text-white outline-none";
+const detailTextClass =
+  "block w-full whitespace-pre-wrap break-words border-0 bg-transparent p-0 text-left text-[15px] font-light leading-[1.55] text-[#d6d6d6] outline-none";
+
+const statusWord: Record<TaskStatus, string> = {
+  open: "Open",
+  done: "Done",
+  cancelled: "Cancelled",
+};
+
+function ExistingTaskBody({
+  title,
+  detail,
+  onTitle,
+  onDetail,
+  onCommit,
+  status,
+  statusValue,
+  statusBusy,
+  outcome,
+  ask,
+  outcomeDraft,
+  outcomeError,
+  onOutcome,
+  onStatus,
+  onKeepStatus,
+  onApplyStatus,
+  action,
+  onAction,
+  owner,
+  ownerName,
+  members,
+  bots,
+  keepCurrentOwner,
+  onOwner,
+  projectId,
+  areaId,
+  projects,
+  areas,
+  onProject,
+  onArea,
+  onOpenProject,
+  onCreateProject,
+  onCreateArea,
+  waitingOn,
+  onWaitingOn,
+  waitingRequired,
+  dueAt,
+  onDueAt,
+  calendarEventId,
+  onCalendar,
+  calendarLink,
+  showCheckIn,
+  panel,
+  onPanel,
+}: {
+  title: string;
+  detail: string;
+  onTitle: (value: string) => void;
+  onDetail: (value: string) => void;
+  onCommit: () => void;
+  status: TaskStatus;
+  statusValue: TaskStatus;
+  statusBusy: boolean;
+  outcome: string | null;
+  ask: Extract<TaskStatus, "done" | "cancelled"> | null;
+  outcomeDraft: string;
+  outcomeError: string | null;
+  onOutcome: (value: string) => void;
+  onStatus: (next: TaskStatus) => void;
+  onKeepStatus: () => void;
+  onApplyStatus: (event: { preventDefault: () => void }) => void;
+  action: Action;
+  onAction: (next: Action) => void;
+  owner: string;
+  ownerName: string;
+  members: Member[];
+  bots: BotSummary[];
+  keepCurrentOwner: boolean;
+  onOwner: (next: string) => void;
+  projectId: string;
+  areaId: string;
+  projects: ProjectSummary[];
+  areas: AreaSummary[];
+  onProject: (id: string) => void;
+  onArea: (id: string) => void;
+  onOpenProject: (projectId: string) => void;
+  onCreateProject: (name: string) => Promise<void>;
+  onCreateArea: (name: string) => Promise<void>;
+  waitingOn: string;
+  onWaitingOn: (value: string) => void;
+  waitingRequired: boolean;
+  dueAt: string;
+  onDueAt: (value: string) => void;
+  calendarEventId: string;
+  onCalendar: (value: string) => void;
+  calendarLink: string | null;
+  showCheckIn: boolean;
+  panel: PropertyPanel | null;
+  onPanel: (panel: PropertyPanel | null) => void;
+}) {
+  function toggle(next: PropertyPanel) {
+    onPanel(panel === next ? null : next);
+  }
+
+  return (
+    <>
+      <h1 className="pr-10">
+        <InlineEditor label="Title" value={title} onChange={onTitle} onCommit={onCommit} className={titleTextClass} />
+      </h1>
+      <div className="mt-4">
+        <InlineEditor
+          label="Detail"
+          value={detail}
+          onChange={onDetail}
+          onCommit={onCommit}
+          multiline
+          linkify
+          placeholder="Add detail…"
+          className={detailTextClass}
+        />
+      </div>
+      <div className="mt-8">
+        <PropertyRow
+          label="Status"
+          value={statusWord[status]}
+          note={!ask && outcome ? outcome : null}
+          open={panel === "status" || ask != null}
+          onToggle={() => toggle("status")}
+        >
+          <Chips label="Status" value={statusValue} options={statusOptions} onChange={onStatus} disabled={statusBusy} />
+          {ask ? (
+            <div>
+              <label className="mt-4 block text-[13px] font-light text-[#8a8a8a]">
+                Outcome
+                <textarea
+                  className={cn(fieldClass, "resize-y")}
+                  rows={2}
+                  value={outcomeDraft}
+                  placeholder="One sentence."
+                  onChange={(event) => onOutcome(event.target.value)}
+                  autoFocus
+                  required
+                />
+              </label>
+              {outcomeError ? <p className="mt-3 text-[13px] text-[#c9a35a]">{outcomeError}</p> : null}
+              <div className="mt-4 flex items-center justify-end gap-7">
+                <Button type="button" variant="ghost" onClick={onKeepStatus} disabled={statusBusy}>
+                  Keep
+                </Button>
+                <Button type="button" variant="solid" onClick={onApplyStatus} disabled={statusBusy}>
+                  {statusBusy ? "Saving…" : ask === "done" ? "Mark done" : "Mark cancelled"}
+                </Button>
+              </div>
+            </div>
+          ) : outcomeError ? (
+            <p className="mt-3 text-[13px] text-[#c9a35a]">{outcomeError}</p>
+          ) : null}
+        </PropertyRow>
+        <PropertyRow label="Action" value={actionLabel[action]} open={panel === "action"} onToggle={() => toggle("action")}>
+          <ActionMatrix labelled={false} action={action} onSelect={onAction} />
+        </PropertyRow>
+        <PropertyRow label="Owner" value={ownerName} open={panel === "owner"} onToggle={() => toggle("owner")}>
+          <div role="group" aria-label="Owner" className="flex flex-col">
+            {members.map((member) => {
+              const key = ownerKey("user", member.userId);
+              const on = key === owner;
+              return (
+                <button
+                  key={member.userId}
+                  type="button"
+                  aria-pressed={on}
+                  className={cn("py-2 text-left text-[15px] font-light", on ? "text-white" : "text-[#a8a8a8] hover:text-white")}
+                  onClick={() => onOwner(key)}
+                >
+                  {member.name}
+                </button>
+              );
+            })}
+            {bots.map((bot) => {
+              const key = ownerKey("bot", bot.id);
+              const on = key === owner;
+              return (
+                <button
+                  key={bot.id}
+                  type="button"
+                  aria-pressed={on}
+                  className={cn("py-2 text-left text-[15px] font-light", on ? "text-white" : "text-[#a8a8a8] hover:text-white")}
+                  onClick={() => onOwner(key)}
+                >
+                  {bot.name}
+                </button>
+              );
+            })}
+            {keepCurrentOwner ? (
+              <button type="button" aria-pressed className="py-2 text-left text-[15px] font-light text-white" onClick={() => onOwner(owner)}>
+                Owner
+              </button>
+            ) : null}
+          </div>
+        </PropertyRow>
+        <CatalogPicker
+          quiet
+          label="Project"
+          emptyLabel="No project"
+          placeholder="Search projects"
+          emptyList="No projects yet."
+          value={projectId}
+          options={projects}
+          onChange={onProject}
+          onOpen={onOpenProject}
+          onCreate={onCreateProject}
+        />
+        <CatalogPicker
+          quiet
+          label="Area"
+          emptyLabel="No area"
+          placeholder="Search areas"
+          emptyList="No areas yet."
+          value={areaId}
+          options={areas}
+          onChange={onArea}
+          onCreate={onCreateArea}
+        />
+        {action === "delegate" ? (
+          <>
+            <PropertyRow
+              label="Waiting on"
+              value={waitingOn.trim() || "Add who this is waiting on"}
+              muted={!waitingOn.trim()}
+              open={panel === "waiting"}
+              onToggle={() => toggle("waiting")}
+            >
+              <input
+                className={fieldClass}
+                value={waitingOn}
+                placeholder="e.g. Naomi, plumber, ATO"
+                autoFocus
+                required={waitingRequired}
+                onChange={(event) => onWaitingOn(event.target.value)}
+                onBlur={onCommit}
+              />
+              <p className={hintClass}>{waitingRequired ? "Say who or what this is waiting on." : "Optional. The bot is the one who acts."}</p>
+            </PropertyRow>
+            <PropertyRow
+              label="Follow up"
+              value={whenLabel(dueAt)}
+              muted={!dueAt}
+              open={panel === "follow"}
+              onToggle={() => toggle("follow")}
+            >
+              <input className={fieldClass} type="datetime-local" value={dueAt} autoFocus onChange={(event) => onDueAt(event.target.value)} onBlur={onCommit} />
+              <p className={hintClass}>Defaults to +3 days when delegated.</p>
+            </PropertyRow>
+          </>
+        ) : null}
+        {action === "schedule" ? (
+          <>
+            <PropertyRow label="When" value={whenLabel(dueAt)} muted={!dueAt} open={panel === "when"} onToggle={() => toggle("when")}>
+              <input className={fieldClass} type="datetime-local" value={dueAt} autoFocus onChange={(event) => onDueAt(event.target.value)} onBlur={onCommit} />
+              {showCheckIn ? <p className={hintClass}>Check in. Complete, cancel, or set a new time.</p> : null}
+            </PropertyRow>
+            <PropertyRow
+              label="Calendar"
+              value={calendarEventId.trim() ? calendarSummary(calendarEventId) : "Needs a calendar"}
+              muted={!calendarEventId.trim()}
+              open={panel === "calendar"}
+              onToggle={() => toggle("calendar")}
+            >
+              <input
+                className={fieldClass}
+                value={calendarEventId}
+                placeholder="Google Calendar link or event id"
+                spellCheck={false}
+                autoCapitalize="off"
+                autoComplete="off"
+                autoFocus
+                onChange={(event) => onCalendar(event.target.value)}
+                onBlur={onCommit}
+              />
+              {calendarLink ? (
+                <a
+                  href={calendarLink}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="mt-3 inline-block max-w-full truncate text-[15px] font-light text-[#eee] underline decoration-[#333] underline-offset-[5px] hover:decoration-white"
+                >
+                  Open calendar
+                </a>
+              ) : (
+                <p className={hintClass}>Needs a calendar.</p>
+              )}
+            </PropertyRow>
+          </>
+        ) : null}
+      </div>
+    </>
+  );
+}
+
+function PropertyRow({
+  label,
+  value,
+  note,
+  muted = false,
+  open,
+  onToggle,
+  children,
+}: {
+  label: string;
+  value: string;
+  note?: string | null;
+  muted?: boolean;
+  open: boolean;
+  onToggle: () => void;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="border-b border-[#161616]">
+      <button type="button" className="flex min-h-11 w-full items-center gap-3 py-2.5 text-left" aria-expanded={open} onClick={onToggle}>
+        <span className="w-24 shrink-0 text-[13px] font-light text-[#8a8a8a]">{label}</span>
+        <span className="min-w-0 flex-1">
+          <span className={cn("block truncate text-[15px] font-light", muted ? "text-[#6f6f6f]" : "text-[#eee]")}>{value}</span>
+          {note ? <span className="mt-0.5 block truncate text-[13px] font-light text-[#8a8a8a]">{note}</span> : null}
+        </span>
+      </button>
+      {open ? <div className="pb-4">{children}</div> : null}
+    </div>
+  );
+}
+
+function InlineEditor({
+  label,
+  value,
+  onChange,
+  onCommit,
+  className,
+  multiline = false,
+  linkify = false,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  onCommit: () => void;
+  className: string;
+  multiline?: boolean;
+  linkify?: boolean;
+  placeholder?: string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const snap = useRef(value);
+  const skipCommit = useRef(false);
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const onChangeRef = useRef(onChange);
+  const onCommitRef = useRef(onCommit);
+  const pending = useRef<string | null>(null);
+  onChangeRef.current = onChange;
+  onCommitRef.current = onCommit;
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!editing || !el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+    el.focus({ preventScroll: true });
+    const end = el.value.length;
+    el.setSelectionRange(end, end);
+  }, [editing]);
+
+  useEffect(() => {
+    if (!editing) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      skipCommit.current = true;
+      onChangeRef.current(snap.current);
+      setEditing(false);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [editing]);
+
+  useEffect(() => {
+    if (pending.current == null || pending.current !== value) return;
+    pending.current = null;
+    onCommitRef.current();
+  }, [value, editing]);
+
+  if (!editing) {
+    if (!value.trim() && placeholder) {
+      return (
+        <button type="button" className={cn(className, "text-[#6f6f6f]")} onClick={() => start()}>
+          {placeholder}
+        </button>
+      );
+    }
+    return (
+      <div
+        role="button"
+        tabIndex={0}
+        aria-label={label}
+        className={className}
+        onClick={(event) => {
+          if (event.target instanceof Element && event.target.closest("a")) return;
+          start();
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            start();
+          }
+        }}
+      >
+        {linkify ? <LinkedText text={value} /> : value}
+      </div>
+    );
+  }
+
+  function start() {
+    snap.current = value;
+    skipCommit.current = false;
+    setEditing(true);
+  }
+
+  return (
+    <textarea
+      ref={ref}
+      aria-label={label}
+      rows={1}
+      value={value}
+      placeholder={placeholder}
+      className={cn(className, "m-0 resize-none overflow-hidden placeholder:text-[#6f6f6f]")}
+      onChange={(event) => {
+        onChange(event.target.value);
+        const el = event.currentTarget;
+        el.style.height = "auto";
+        el.style.height = `${el.scrollHeight}px`;
+      }}
+      onBlur={(event) => {
+        const next = event.currentTarget.value;
+        const skip = skipCommit.current;
+        skipCommit.current = false;
+        setEditing(false);
+        if (skip) return;
+        if (!multiline && !next.trim()) {
+          pending.current = null;
+          onChange(snap.current);
+          return;
+        }
+        pending.current = next;
+        if (next !== value) onChange(next);
+      }}
+      onKeyDown={(event) => {
+        if (!multiline && event.key === "Enter") {
+          event.preventDefault();
+          event.currentTarget.blur();
+        }
+      }}
+    />
+  );
+}
+
+function LinkedText({ text }: { text: string }) {
+  const nodes: ReactNode[] = [];
+  const pattern = /https?:\/\/[^\s<]+/gi;
+  let last = 0;
+  for (const match of text.matchAll(pattern)) {
+    const index = match.index ?? 0;
+    const raw = match[0];
+    if (index > last) nodes.push(text.slice(last, index));
+    const href = raw.replace(/[),.;:!?]+$/g, "");
+    const rest = raw.slice(href.length);
+    nodes.push(
+      <a
+        key={`${index}-${href}`}
+        href={href}
+        target="_blank"
+        rel="noreferrer noopener"
+        className="underline decoration-[#333] underline-offset-[3px] hover:decoration-white"
+        onClick={(event) => event.stopPropagation()}
+      >
+        {href}
+      </a>,
+    );
+    if (rest) nodes.push(rest);
+    last = index + raw.length;
+  }
+  if (last < text.length) nodes.push(text.slice(last));
+  return <>{nodes}</>;
+}
+
+function whenLabel(value: string) {
+  if (!value) return "Add a time";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Add a time";
+  return new Intl.DateTimeFormat("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }).format(date);
+}
+
+function calendarSummary(value: string) {
+  const trimmed = value.trim();
+  try {
+    return new URL(trimmed).hostname.replace(/^www\./, "");
+  } catch {
+    return trimmed.length > 32 ? `${trimmed.slice(0, 32)}…` : trimmed;
+  }
 }
