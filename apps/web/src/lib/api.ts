@@ -1,5 +1,6 @@
 import type {
   Action,
+  AttachedLink,
   AreaSummary,
   AuthConfig,
   BotSummary,
@@ -130,4 +131,8 @@ export const api = {
       body: JSON.stringify(outcome === undefined ? {} : { outcome }),
     }),
   deleteTask: (id: string) => request<DeletedTask>(`/tasks/${id}`, { method: "DELETE" }),
+  addTaskLink: (taskId: string, body: { title: string; url: string }) =>
+    request<AttachedLink>(`/tasks/${taskId}/links`, { method: "POST", body: JSON.stringify(body) }),
+  removeTaskLink: (taskId: string, linkId: string) =>
+    request<{ id: string; deleted: true }>(`/tasks/${taskId}/links/${linkId}`, { method: "DELETE" }),
 };

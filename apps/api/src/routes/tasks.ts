@@ -34,7 +34,8 @@ import { readJson, requireUuid } from "../http.js";
 import { parseIdempotencyKey, withCreateIdempotency } from "../idempotency.js";
 import { assertNamedOnTeam } from "../catalog.js";
 import { tasks } from "../schema.js";
-import { loadTaskView, taskViews, viewTask } from "../task-json.js";
+import { attachLinks, loadTaskView, taskViews, viewTask } from "../task-json.js";
+import { registerTaskLinkRoutes } from "./task-links.js";
 
 const BLOCKED_UPDATE = new Set([
   "status",
@@ -50,6 +51,7 @@ const BLOCKED_UPDATE = new Set([
 
 export const taskRoutes = new Hono<AppEnv>();
 taskRoutes.use("*", requireActor);
+registerTaskLinkRoutes(taskRoutes);
 
 taskRoutes.get("/do-immediately", async (c) => {
   const actor = c.get("actor");
@@ -70,7 +72,7 @@ taskRoutes.get("/do-immediately", async (c) => {
       desc(tasks.updatedAt),
     )
     .limit(100);
-  return c.json({ tasks: rows.map(viewTask) });
+  return c.json({ tasks: await attachLinks(rows.map(viewTask)) });
 });
 
 taskRoutes.get("/", async (c) => {
@@ -128,7 +130,7 @@ taskRoutes.get("/", async (c) => {
     .where(and(...filters))
     .orderBy(desc(tasks.updatedAt), desc(tasks.createdAt))
     .limit(200);
-  return c.json({ tasks: rows.map(viewTask) });
+  return c.json({ tasks: await attachLinks(rows.map(viewTask)) });
 });
 
 taskRoutes.post("/", async (c) => {

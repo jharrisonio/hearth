@@ -7,8 +7,11 @@ import {
   createProjectSchema,
   createProjectToolSchema,
   createTaskSchema,
+  addTaskLinkToolSchema,
+  createAttachedLinkSchema,
   createTaskToolSchema,
   deleteTaskToolSchema,
+  removeTaskLinkToolSchema,
   doImmediatelyQuerySchema,
   httpOperations,
   IDEMPOTENCY_KEY_HEADER,
@@ -48,6 +51,7 @@ const MCP_INSTRUCTIONS = [
   "Projects and areas. A project is a multi-step outcome. An area is a life domain such as House or Finance. Link them with projectId and areaId. A task title is one next action, not the whole outcome. On a project, do_now, delegate, and schedule are active next actions and several may run at once. Future steps are separate tasks with action later. Project notes hold the plan, not the step list.",
   "Queues. list_do_immediately follows the caller and matches the implementation. A human morning queue is inMorningQueue: open do_now; open schedule that still needs a calendar or is a check-in (dueAt strictly in the past); and delegate tasks whose owner is not a bot when dueAt is due or overdue, or when dueAt is empty and the task is more than three days old. Bot-owned delegates stay out of that queue. Bot-owned schedule tasks stay in, so a person can attach the calendar or check in. A bot morning queue is inBotQueue: open delegate tasks this token owns, at any dueAt, plus schedule tasks this token owns that still need a calendar or are a check-in. do_now stays on the human queue. Another bot's delegate work is list_tasks with action=delegate, status=open, and owner=bot:<id>. That bot's check-ins use action=schedule, status=open, owner=bot:<id>, and dueBefore now. List the ones that still need a calendar with needsCalendar=true instead of dueBefore.",
   "Capture and finish. Pass idempotencyKey on create_task. It is sent as Idempotency-Key. The same key and body, for this bot, return the original task for 24 hours. A different body with that key is rejected. Prefer a source link when the task came from an email or a page: { type: \"email\" | \"url\", href, label?, externalId? }. href is an http(s) URL. For Gmail, href is https://mail.google.com/mail/u/0/#all/<threadId> and externalId is the message or thread id. Pass source: null on update_task to clear it. When you finish the work, call complete_task in the same turn with a short outcome. cancel_task is a soft cancel and keeps the row, with an outcome (the default is \"cancelled\"). delete_task is a hard delete for a mistake or a duplicate. Archiving a project is rejected while any task on it is still open. Complete or cancel those tasks first.",
+  "Details and links. Keep task details to one or two lines. When a task involves choosing between options, comparisons, or background research, consider writing a rich page (a Grok Bot Page or canvas, a Drive doc, or a sheet) that explains the options or research, and attach its URL with add_task_link and a clear title, instead of putting long text in details. Linked Pages may be private to James. When you finish or progress a task that has a linked page, also put the key decision or finding in the task outcome, one short sentence, so other bots can read it without opening the page.",
   "Bot owners are named when Hearth is connected, or later in Settings. Use a registered bot id as owner. Reconnecting is not required to add, rename, or retire an owner. Live edits are not pushed over MCP. Subscribe with GET /teams/:teamId/events (text/event-stream, same Bearer token). Read the hearth://task-events resource for the exact URL and the event shape.",
 ].join("\n\n");
 
@@ -119,7 +123,7 @@ async function taskEventsText(app: FetchApp, authorization: string) {
     "Send the same Authorization: Bearer token and Accept: text/event-stream.",
     urls,
     "Through the web origin, prefix the path with /api.",
-    "The event name is created, updated, completed, cancelled, or deleted. data is JSON with type, teamId, taskId, at, and task (the same task object as GET /tasks, including source).",
+    "The event name is created, updated, completed, cancelled, or deleted. data is JSON with type, teamId, taskId, at, and task (the same task object as GET /tasks, including source and links).",
     "On deleted, task is that row on the process that removed it, and null on another process because the row is already gone. taskId is enough to drop it.",
     "event ready means the subscription is on. Lines starting with ':' are keepalives. event reconnect means open the URL again and refetch with list_tasks.",
     "There is no backlog. An idempotent replay does not emit another created event.",
@@ -177,7 +181,7 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "complete_task",
     {
       description:
-        "Mark a task done and record a short outcome in the same turn you finish the work (POST /tasks/:id/complete).",
+        "Mark a task done and record a short outcome in the same turn you finish the work (POST /tasks/:id/complete). If the task has a linked page, put the key decision or finding in that outcome, one short sentence. The page may be private to James, and other bots cannot open it.",
       inputSchema: completeTaskToolSchema,
     },
     async ({ id, outcome }) =>
@@ -217,10 +221,40 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
   );
 
   server.registerTool(
+    "add_task_link",
+    {
+      description:
+        "Attach an http(s) link to a task (POST /tasks/:id/links). title is the label a person sees. The same taskId and url returns the existing link and does not add a second row. Use this for a page that holds options, a comparison, or research, instead of a long detail. url must be http or https.",
+      inputSchema: addTaskLinkToolSchema,
+    },
+    async ({ taskId, ...body }) => {
+      const parsed = createAttachedLinkSchema.parse(body);
+      return asTool(await callApi(app, authorization, `/tasks/${taskId}/links`, {
+        method: httpOperations.createTaskLink.method,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(parsed),
+      }));
+    },
+  );
+
+  server.registerTool(
+    "remove_task_link",
+    {
+      description:
+        "Remove one link from a task (DELETE /tasks/:id/links/:linkId). linkId is the link id from the task's links. The task stays.",
+      inputSchema: removeTaskLinkToolSchema,
+    },
+    async ({ taskId, linkId }) =>
+      asTool(await callApi(app, authorization, `/tasks/${taskId}/links/${linkId}`, {
+        method: httpOperations.deleteTaskLink.method,
+      })),
+  );
+
+  server.registerTool(
     "list_tasks",
     {
       description:
-        "List tasks (GET /tasks). Each task includes action, source (an email or url link, or null), plus project and area when set. Filter projectId together with action to separate a project's active steps (do_now, delegate, schedule) from later support steps. A bot's open delegate work is action=delegate, status=open, and owner=bot:<uuid>. Other filters: teamId, status (open, done, or cancelled), important, urgent, needsCalendar, owner (user:<uuid> or bot:<uuid>), dueBefore, areaId, mine. Open schedule tasks that still need a calendar are action=schedule, status=open, and needsCalendar=true. A check-in is an open schedule with dueAt in the past (dueBefore now), whether or not a calendar is attached. For another bot, add owner=bot:<uuid>. Omit teamId to use this bot's team. status=open hides cancelled tasks. status=cancelled is the audit list.",
+        "List tasks (GET /tasks). Each task includes action, source (an email or url link, or null), links (http(s) pages attached to the task), plus project and area when set. Filter projectId together with action to separate a project's active steps (do_now, delegate, schedule) from later support steps. A bot's open delegate work is action=delegate, status=open, and owner=bot:<uuid>. Other filters: teamId, status (open, done, or cancelled), important, urgent, needsCalendar, owner (user:<uuid> or bot:<uuid>), dueBefore, areaId, mine. Open schedule tasks that still need a calendar are action=schedule, status=open, and needsCalendar=true. A check-in is an open schedule with dueAt in the past (dueBefore now), whether or not a calendar is attached. For another bot, add owner=bot:<uuid>. Omit teamId to use this bot's team. status=open hides cancelled tasks. status=cancelled is the audit list.",
       inputSchema: listTasksQuerySchema,
     },
     async (query) => asTool(await callApi(app, authorization, `${httpOperations.listTasks.path}${queryString(query)}`)),

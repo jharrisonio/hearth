@@ -206,6 +206,47 @@ export const taskLinkSchema = z.object({
 });
 export type TaskLink = z.infer<typeof taskLinkSchema>;
 
+/** An http(s) page attached to a task. Separate from `source`, which is where the task came from. */
+export const attachedLinkSchema = z.object({
+  id: z.string().uuid(),
+  title: z.string(),
+  url: z.string(),
+  position: z.number().int(),
+  createdBy: actorRefSchema,
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type AttachedLink = z.infer<typeof attachedLinkSchema>;
+
+const linkTitle = z.string().trim().min(1).max(200);
+const linkUrl = z.string().trim().min(1).max(2048).refine(isHttpUrl, "must be an http(s) URL");
+
+export const createAttachedLinkSchema = z
+  .object({
+    title: linkTitle,
+    url: linkUrl,
+    position: z.number().int().min(0).max(1_000_000).optional(),
+  })
+  .strict();
+export type CreateAttachedLinkInput = z.infer<typeof createAttachedLinkSchema>;
+
+export const updateAttachedLinkSchema = z
+  .object({
+    title: linkTitle.optional(),
+    url: linkUrl.optional(),
+    position: z.number().int().min(0).max(1_000_000).optional(),
+  })
+  .strict()
+  .refine((value) => value.title !== undefined || value.url !== undefined || value.position !== undefined, {
+    message: "Provide a title, url, or position.",
+  });
+export type UpdateAttachedLinkInput = z.infer<typeof updateAttachedLinkSchema>;
+
+export interface DeletedLink {
+  id: string;
+  deleted: true;
+}
+
 export const taskSchema = z.object({
   id: z.string().uuid(),
   teamId: z.string().uuid(),
@@ -222,6 +263,7 @@ export const taskSchema = z.object({
   project: taskLinkSchema.nullable(),
   area: taskLinkSchema.nullable(),
   source: taskSourceSchema.nullable(),
+  links: z.array(attachedLinkSchema),
   dueAt: z.string().nullable(),
   outcome: z.string().nullable(),
   createdAt: z.string(),
@@ -491,6 +533,10 @@ export const httpOperations = {
   deleteTask: { method: "DELETE", path: "/tasks/:id" },
   listTasks: { method: "GET", path: "/tasks" },
   listDoImmediately: { method: "GET", path: "/tasks/do-immediately" },
+  listTaskLinks: { method: "GET", path: "/tasks/:id/links" },
+  createTaskLink: { method: "POST", path: "/tasks/:id/links" },
+  updateTaskLink: { method: "PATCH", path: "/tasks/:id/links/:linkId" },
+  deleteTaskLink: { method: "DELETE", path: "/tasks/:id/links/:linkId" },
   taskEvents: { method: "GET", path: "/teams/:id/events" },
 } as const;
 
@@ -568,6 +614,24 @@ export const deleteTaskToolSchema = z
   })
   .strict();
 export type DeleteTaskToolInput = z.infer<typeof deleteTaskToolSchema>;
+
+/** add_task_link. The same task and url returns the existing row. */
+export const addTaskLinkToolSchema = z
+  .object({
+    taskId: z.string().uuid(),
+    title: linkTitle,
+    url: linkUrl,
+  })
+  .strict();
+export type AddTaskLinkToolInput = z.infer<typeof addTaskLinkToolSchema>;
+
+export const removeTaskLinkToolSchema = z
+  .object({
+    taskId: z.string().uuid(),
+    linkId: z.string().uuid(),
+  })
+  .strict();
+export type RemoveTaskLinkToolInput = z.infer<typeof removeTaskLinkToolSchema>;
 
 /**
  * Kept for the REST body shape. These tools are not registered on the MCP server.

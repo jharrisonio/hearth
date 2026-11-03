@@ -245,6 +245,31 @@ export const tasks = pgTable(
   ],
 );
 
+/**
+ * An http(s) page attached to a task.
+ * `created_by_*` is a user or a bot, the same shape as `tasks`, so it has no foreign key.
+ */
+export const taskLinks = pgTable(
+  "task_links",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => tasks.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    url: text("url").notNull(),
+    createdByType: actorType("created_by_type").notNull(),
+    createdById: uuid("created_by_id").notNull(),
+    position: integer("position").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("task_links_task_id_idx").on(table.taskId),
+    unique("task_links_task_url_key").on(table.taskId, table.url),
+  ],
+);
+
 /** One successful POST /tasks per actor and Idempotency-Key. `actor_id` is a user or a bot, so it has no foreign key. */
 export const idempotencyKeys = pgTable(
   "idempotency_keys",
