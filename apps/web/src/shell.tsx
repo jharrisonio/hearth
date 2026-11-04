@@ -1,6 +1,6 @@
 import type { Action, Task, TeamSummary } from "@hearth/shared";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { Outlet, useLocation, useNavigate } from "react-router";
+import { Outlet, useLocation, useMatch, useNavigate } from "react-router";
 import { useAuth } from "@/auth";
 import { TabBar } from "@/components/TabBar";
 import { TaskDialog } from "@/components/TaskDialog";
@@ -44,7 +44,10 @@ export function Shell() {
   const [pickingList, setPickingList] = useState(false);
   const [creatingHousehold, setCreatingHousehold] = useState(false);
   const [editing, setEditing] = useState<Editor | null>(null);
+  const [missingKey, setMissingKey] = useState<string | null>(null);
   const [taskRevision, setTaskRevision] = useState(0);
+  const taskMatch = useMatch("/t/:key");
+  const routeKey = taskMatch?.params.key ? decodeRouteKey(taskMatch.params.key) : null;
 
   const reloadTeams = useCallback(async () => {
     try {
@@ -84,12 +87,49 @@ export function Shell() {
 
   const openTask = useCallback(
     (task: Task | null, defaultAction: Action = "do_now") => {
-      const teamId = task?.teamId ?? current?.id;
+      if (task?.key) {
+        setMissingKey(null);
+        chooseList(task.teamId);
+        setEditing({ teamId: task.teamId, task, defaultAction: task.action });
+        navigate(`/t/${task.key}`);
+        return;
+      }
+      const teamId = current?.id;
       if (!teamId) return;
-      setEditing({ teamId, task, defaultAction });
+      setEditing({ teamId, task: null, defaultAction });
     },
-    [current?.id],
+    [chooseList, current?.id, navigate],
   );
+
+  useEffect(() => {
+    if (!routeKey) {
+      setMissingKey(null);
+      setEditing((currentEditor) => (currentEditor && currentEditor.task === null ? currentEditor : null));
+      return;
+    }
+    const key = routeKey;
+    let cancelled = false;
+    void api
+      .task(key)
+      .then((task) => {
+        if (cancelled) return;
+        setMissingKey(null);
+        chooseList(task.teamId);
+        setEditing((currentEditor) => {
+          if (currentEditor?.task?.id === task.id) return currentEditor;
+          return { teamId: task.teamId, task, defaultAction: task.action };
+        });
+        if (task.key !== key) navigate(`/t/${task.key}`, { replace: true });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setEditing(null);
+        setMissingKey(key);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [routeKey, chooseList, navigate]);
 
   const value = useMemo<ShellValue>(
     () => ({
@@ -125,9 +165,22 @@ export function Shell() {
             setEditing(null);
             navigate(`/projects/${projectId}`);
           }}
-          onClose={() => setEditing(null)}
+          onClose={() => {
+            setEditing(null);
+            if (routeKey) navigate("/tasks", { replace: true });
+          }}
           onSaved={() => setTaskRevision((revision) => revision + 1)}
         />
+      ) : null}
+      {missingKey ? (
+        <Dialog open onOpenChange={(next) => !next && navigate("/tasks", { replace: true })}>
+          <DialogContent>
+            <div className="px-7 pt-16">
+              <DialogTitle>Not found</DialogTitle>
+              <DialogDescription>No task {missingKey}.</DialogDescription>
+            </div>
+          </DialogContent>
+        </Dialog>
       ) : null}
       <ListPicker
         open={pickingList}
@@ -260,4 +313,12 @@ function HouseholdDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+function decodeRouteKey(value: string) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }

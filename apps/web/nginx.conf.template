@@ -59,6 +59,8 @@ server {
     proxy_set_header Connection "";
   }
 
+  # Deep links (/tasks, /t/:key, /projects/:id, /archive, /settings) have no
+  # file on disk. Fall back to the app so refresh and a pasted URL both load.
   location / {
     try_files $uri $uri/ /index.html;
   }

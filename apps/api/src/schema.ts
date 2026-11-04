@@ -15,12 +15,20 @@ export const users = pgTable("users", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const teams = pgTable("teams", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  name: text("name").notNull(),
-  kind: teamKind("kind").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const teams = pgTable(
+  "teams",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    kind: teamKind("kind").notNull(),
+    /** Uppercase letters. James's personal list is J, the Harrison household is H. */
+    key: text("key").notNull().default(""),
+    /** Last task number handed out. The next create stores this plus one. */
+    nextTaskNumber: integer("next_task_number").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [unique("teams_key_unique").on(table.key)],
+);
 
 export const memberships = pgTable(
   "memberships",
@@ -239,11 +247,14 @@ export const tasks = pgTable(
     cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
     createdByType: actorType("created_by_type").notNull(),
     createdById: uuid("created_by_id").notNull(),
+    /** Per-team sequence. With teams.key this is the public id, such as J-142. */
+    number: integer("number").notNull(),
   },
   (table) => [
     index("tasks_team_status_action_idx").on(table.teamId, table.status, table.action),
     index("tasks_project_id_idx").on(table.projectId),
     index("tasks_area_id_idx").on(table.areaId),
+    unique("tasks_team_number_unique").on(table.teamId, table.number),
   ],
 );
 

@@ -34,8 +34,9 @@ import { publishTaskEvent } from "../events.js";
 import { readJson, requireUuid } from "../http.js";
 import { parseIdempotencyKey, withCreateIdempotency } from "../idempotency.js";
 import { assertNamedOnTeam } from "../catalog.js";
-import { tasks } from "../schema.js";
+import { tasks, teams } from "../schema.js";
 import { attachLinks, loadTaskView, taskViews, viewTask } from "../task-json.js";
+import { resolveTaskId } from "../task-ref.js";
 import { registerTaskLinkRoutes } from "./task-links.js";
 
 const BLOCKED_UPDATE = new Set([
@@ -49,6 +50,8 @@ const BLOCKED_UPDATE = new Set([
   "updatedAt",
   "createdBy",
   "snoozedUntil",
+  "key",
+  "number",
 ]);
 
 export const taskRoutes = new Hono<AppEnv>();
@@ -147,7 +150,16 @@ taskRoutes.post("/", async (c) => {
   await assertOwnerOnTeam(body.teamId, values.owner);
   await assertLinks(body.teamId, values.row.projectId, values.row.areaId);
   const { row, replayed } = await withCreateIdempotency(actor, key, body, async (tx) => {
-    const [inserted] = await tx.insert(tasks).values(values.row).returning();
+    const [counter] = await tx
+      .update(teams)
+      .set({ nextTaskNumber: sql`${teams.nextTaskNumber} + 1` })
+      .where(eq(teams.id, body.teamId))
+      .returning({ nextTaskNumber: teams.nextTaskNumber });
+    if (!counter) throw new Error("Failed to number task");
+    const [inserted] = await tx
+      .insert(tasks)
+      .values({ ...values.row, number: counter.nextTaskNumber })
+      .returning();
     if (!inserted) throw new Error("Failed to create task");
     return inserted;
   });
@@ -161,9 +173,17 @@ taskRoutes.post("/", async (c) => {
   return c.json(task, 201);
 });
 
+taskRoutes.get("/:id", async (c) => {
+  const id = await resolveTaskId(c.get("actor"), c.req.param("id"));
+  const existing = await loadTask(id);
+  await requireTeam(c.get("actor"), existing.teamId);
+  const task = await loadTaskView(id);
+  if (!task) throw new HttpError(404, "not_found", "Task not found.");
+  return c.json(task);
+});
+
 taskRoutes.patch("/:id", async (c) => {
-  const id = c.req.param("id");
-  requireUuid(id, "id");
+  const id = await resolveTaskId(c.get("actor"), c.req.param("id"));
   const raw = await readJson(c);
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new HttpError(400, "invalid_body", "Body must be a JSON object.");
@@ -241,8 +261,7 @@ taskRoutes.patch("/:id", async (c) => {
 });
 
 taskRoutes.post("/:id/complete", async (c) => {
-  const id = c.req.param("id");
-  requireUuid(id, "id");
+  const id = await resolveTaskId(c.get("actor"), c.req.param("id"));
   const body = parseBody(completeTaskSchema, await readJson(c));
   const existing = await loadTask(id);
   await requireTeam(c.get("actor"), existing.teamId);
@@ -271,8 +290,7 @@ taskRoutes.post("/:id/complete", async (c) => {
 });
 
 taskRoutes.post("/:id/cancel", async (c) => {
-  const id = c.req.param("id");
-  requireUuid(id, "id");
+  const id = await resolveTaskId(c.get("actor"), c.req.param("id"));
   const body = parseBody(cancelTaskSchema, await readJson(c));
   const existing = await loadTask(id);
   await requireTeam(c.get("actor"), existing.teamId);
@@ -301,8 +319,7 @@ taskRoutes.post("/:id/cancel", async (c) => {
 });
 
 taskRoutes.post("/:id/reopen", async (c) => {
-  const id = c.req.param("id");
-  requireUuid(id, "id");
+  const id = await resolveTaskId(c.get("actor"), c.req.param("id"));
   const existing = await loadTask(id);
   await requireTeam(c.get("actor"), existing.teamId);
   if (existing.status === "open") {
@@ -330,8 +347,7 @@ taskRoutes.post("/:id/reopen", async (c) => {
 });
 
 taskRoutes.post("/:id/snooze", async (c) => {
-  const id = c.req.param("id");
-  requireUuid(id, "id");
+  const id = await resolveTaskId(c.get("actor"), c.req.param("id"));
   const body = parseBody(snoozeTaskSchema, await readJson(c));
   const existing = await loadTask(id);
   await requireTeam(c.get("actor"), existing.teamId);
@@ -356,8 +372,7 @@ taskRoutes.post("/:id/snooze", async (c) => {
 });
 
 taskRoutes.post("/:id/unsnooze", async (c) => {
-  const id = c.req.param("id");
-  requireUuid(id, "id");
+  const id = await resolveTaskId(c.get("actor"), c.req.param("id"));
   const existing = await loadTask(id);
   await requireTeam(c.get("actor"), existing.teamId);
   if (existing.snoozedUntil == null) {
@@ -379,8 +394,7 @@ taskRoutes.post("/:id/unsnooze", async (c) => {
 });
 
 taskRoutes.delete("/:id", async (c) => {
-  const id = c.req.param("id");
-  requireUuid(id, "id");
+  const id = await resolveTaskId(c.get("actor"), c.req.param("id"));
   const existing = await loadTask(id);
   await requireTeam(c.get("actor"), existing.teamId);
   const snapshot = await loadTaskView(id);

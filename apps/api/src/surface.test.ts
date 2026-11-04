@@ -293,6 +293,8 @@ describe("task surface", { concurrency: 1 }, () => {
       "numbered instructions",
       "keep them current",
       "snooze a started do_now",
+      "Reference a task by its key",
+      "https://hearth.jharrison.io/t/",
     ]) {
       assert.match(instructions, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     }
@@ -1681,6 +1683,142 @@ describe("task surface", { concurrency: 1 }, () => {
     ]);
     assert.equal(after.rows[0]?.n, 0);
   });
+
+  test("team keys and task numbers are assigned and backfilled in created order", async () => {
+    const [user] = await db
+      .insert(users)
+      .values({ email: `keys-${crypto.randomUUID()}@example.com`, name: "James" })
+      .returning();
+    if (!user) throw new Error("user seed failed");
+    const [personal] = await db.insert(teams).values({ name: "James's list", kind: "personal" }).returning();
+    const [home] = await db.insert(teams).values({ name: "The Harrisons", kind: "household" }).returning();
+    const [kitchen] = await db.insert(teams).values({ name: "Kitchen reno", kind: "household" }).returning();
+    const [kitchenAgain] = await db.insert(teams).values({ name: "Kitchen reno", kind: "household" }).returning();
+    assert.equal(personal?.key, "J");
+    assert.equal(home?.key, "H");
+    assert.equal(kitchen?.key, "KR");
+    assert.notEqual(kitchenAgain?.key, "KR");
+    assert.match(kitchenAgain?.key ?? "", /^[A-Z]+$/);
+
+    const [team] = await db.insert(teams).values({ name: "Elsewhere", kind: "household" }).returning();
+    if (!team) throw new Error("team seed failed");
+    const base = {
+      teamId: team.id,
+      ownerType: "user" as const,
+      ownerId: user.id,
+      createdByType: "user" as const,
+      createdById: user.id,
+    };
+    await db.insert(tasks).values([
+      { ...base, title: "Later", number: 9, createdAt: new Date("2020-01-02T00:00:00.000Z") },
+      { ...base, title: "Earlier", number: 4, createdAt: new Date("2020-01-01T00:00:00.000Z") },
+    ]);
+    await pool.query("select hearth_assign_task_numbers()");
+    const numbered = await pool.query<{ title: string; number: number }>(
+      "select title, number from tasks where team_id = $1 order by number",
+      [team.id],
+    );
+    assert.deepEqual(
+      numbered.rows.map((row) => [row.title, row.number]),
+      [
+        ["Earlier", 1],
+        ["Later", 2],
+      ],
+    );
+    const counter = await pool.query<{ next_task_number: number }>(
+      "select next_task_number from teams where id = $1",
+      [team.id],
+    );
+    assert.equal(counter.rows[0]?.next_task_number, 2);
+  });
+
+  test("creates take unique numbers and an idempotent replay does not skip one", async () => {
+    const fixture = await seed();
+    const body = { teamId: fixture.team.id, title: "Buy oat milk" };
+    const first = await postTask(fixture.secret, body, "once");
+    assert.equal(first.status, 201);
+    const created = taskBody(first.json);
+    const replay = await postTask(fixture.secret, body, "once");
+    assert.equal(replay.status, 200);
+    assert.equal(taskBody(replay.json).number, created.number);
+    assert.equal(taskBody(replay.json).key, created.key);
+
+    const results = await Promise.all(
+      Array.from({ length: 8 }, (_, index) =>
+        postTask(fixture.secret, { teamId: fixture.team.id, title: `Parallel ${index}` }),
+      ),
+    );
+    assert.ok(results.every((result) => result.status === 201));
+    const numbers = results.map((result) => taskBody(result.json).number);
+    assert.equal(new Set(numbers).size, numbers.length);
+    const expected = created.number + 1;
+    assert.deepEqual(
+      numbers.slice().sort((a, b) => a - b),
+      Array.from({ length: 8 }, (_, index) => expected + index),
+    );
+    assert.equal(await countTasks(fixture.team.id), 9);
+  });
+
+  test("a task key works on REST and MCP and is refused for another team", async () => {
+    const fixture = await seed();
+    const other = await seed();
+    const created = await postTask(fixture.secret, { teamId: fixture.team.id, title: "Call the plumber" });
+    const task = taskBody(created.json);
+    assert.equal(task.key, `H-${task.number}`);
+
+    const fetched = await call(fixture.secret, "GET", `/tasks/${task.key.toLowerCase()}`);
+    assert.equal(fetched.status, 200);
+    assert.equal(taskBody(fetched.json).id, task.id);
+
+    const byUuid = await call(fixture.secret, "GET", `/tasks/${task.id}`);
+    assert.equal(byUuid.status, 200);
+    assert.equal(taskBody(byUuid.json).key, task.key);
+
+    const patched = await call(fixture.secret, "PATCH", `/tasks/${task.key.toLowerCase()}`, {
+      title: "Call the plumber today",
+    });
+    assert.equal(patched.status, 200);
+    assert.equal(taskBody(patched.json).title, "Call the plumber today");
+
+    const linked = await call(fixture.secret, "POST", `/tasks/${task.key}/links`, {
+      title: "Note",
+      url: "https://example.com/plumber",
+    });
+    assert.equal(linked.status, 201);
+
+    const updated = toolJson(
+      await rpc(fixture.secret, "tools/call", {
+        name: "update_task",
+        arguments: { id: task.key.toLowerCase(), title: "Call the plumber now" },
+      }),
+    ) as { title: string; key: string };
+    assert.equal(updated.title, "Call the plumber now");
+    assert.equal(updated.key, task.key);
+
+    const denied = await call(other.secret, "GET", `/tasks/${task.key}`);
+    assert.equal(denied.status, 403);
+    assert.equal(errorBody(denied.json).code, "forbidden");
+
+    const deniedTool = rpcResult(
+      (
+        await rpc(other.secret, "tools/call", {
+          name: "complete_task",
+          arguments: { id: task.key, outcome: "Done" },
+        })
+      ).json,
+    ) as { isError?: boolean; content?: { text?: string }[] };
+    assert.equal(deniedTool.isError, true);
+    assert.match(deniedTool.content?.[0]?.text ?? "", /^403 /);
+
+    const missing = await call(fixture.secret, "GET", "/tasks/H-99999");
+    assert.equal(missing.status, 404);
+    const bad = await call(fixture.secret, "GET", "/tasks/not-a-task");
+    assert.equal(bad.status, 400);
+
+    const still = await call(fixture.secret, "GET", `/tasks/${task.key}`);
+    assert.equal(still.status, 200);
+    assert.equal(taskBody(still.json).title, "Call the plumber now");
+  });
 });
 
 async function seed() {
@@ -1772,6 +1910,8 @@ function toolJson(response: { json: unknown }) {
 function taskBody(json: unknown) {
   const task = json as {
     id: string;
+    key: string;
+    number: number;
     owner: { type: string; id: string };
     title: string;
     action: string;
@@ -1780,6 +1920,8 @@ function taskBody(json: unknown) {
     area: { id: string; name: string } | null;
   };
   assert.equal(typeof task.id, "string");
+  assert.match(task.key, /^[A-Z]+-\d+$/);
+  assert.equal(task.number, Number(task.key.slice(task.key.lastIndexOf("-") + 1)));
   assert.ok("source" in task, "task includes source");
   assert.ok("snoozedUntil" in task, "task includes snoozedUntil");
   assert.ok(Array.isArray((json as { links?: unknown }).links), "task includes links");

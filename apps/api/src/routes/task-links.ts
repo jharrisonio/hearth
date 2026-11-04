@@ -8,6 +8,7 @@ import { publishTaskEvent } from "../events.js";
 import { readJson, requireUuid } from "../http.js";
 import { taskLinks, tasks } from "../schema.js";
 import { loadTaskView, toAttachedLink } from "../task-json.js";
+import { resolveTaskId } from "../task-ref.js";
 
 export function registerTaskLinkRoutes(routes: Hono<AppEnv>) {
   routes.get("/:id/links", async (c) => {
@@ -103,8 +104,8 @@ export function registerTaskLinkRoutes(routes: Hono<AppEnv>) {
   });
 }
 
-async function loadOwnedTask(actor: Actor, id: string) {
-  requireUuid(id, "id");
+async function loadOwnedTask(actor: Actor, rawId: string) {
+  const id = await resolveTaskId(actor, rawId);
   const [row] = await db.select().from(tasks).where(eq(tasks.id, id)).limit(1);
   if (!row) throw new HttpError(404, "not_found", "Task not found.");
   await requireTeam(actor, row.teamId);

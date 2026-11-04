@@ -56,6 +56,7 @@ const MCP_INSTRUCTIONS = [
   "Capture and finish. Pass idempotencyKey on create_task. It is sent as Idempotency-Key. The same key and body, for this bot, return the original task for 24 hours. A different body with that key is rejected. Prefer a source link when the task came from an email or a page: { type: \"email\" | \"url\", href, label?, externalId? }. href is an http(s) URL. For Gmail, href is https://mail.google.com/mail/u/0/#all/<threadId> and externalId is the message or thread id. Pass source: null on update_task to clear it. When you finish the work, call complete_task in the same turn with a short outcome. cancel_task is a soft cancel and keeps the row, with an outcome (the default is \"cancelled\"). delete_task is a hard delete for a mistake or a duplicate. Archiving a project is rejected while any task on it is still open. Complete or cancel those tasks first.",
   "Details and links. Keep task details to one or two lines. Put page links in Links with a clear title, not in details or source. Source is only where the task came from, such as an email, and its label is the friendly name on that row. When a task involves choosing between options, comparisons, or background research, write a rich page (a Grok Bot Page or canvas, a Drive doc, or a sheet) and attach it with add_task_link and a clear title. Linked Pages may be private to James. When you finish or progress a task that has a linked page, also put the key decision or finding in the task outcome, one short sentence, so other bots can read it without opening the page.",
   "Delegated tasks. When James delegates a task to a bot, the bot does the research. It either writes a short status summary, a few lines, in the task detail, or attaches a small page of what it found, such as a comparison or a shortlist, via Links with a clear title. If James needs to take steps, the bot writes the numbered instructions for him. When a delegated task comes back with information, from a bot or from a person in waitingOn, update it: either complete it with a one-sentence outcome and create a new Do now task for James with the next step (link the page), or update its detail, links, and waitingOn to show where it stands. Bots review their delegated tasks during their morning queue and keep them current.",
+  "Keys. Reference a task by its key, such as J-142, and link it as https://hearth.jharrison.io/t/<key>. The key is on every task. A UUID still works anywhere a task id is accepted. Lookup is case-insensitive.",
   "Bot owners are named when Hearth is connected, or later in Settings. Use a registered bot id as owner. Reconnecting is not required to add, rename, or retire an owner. Live edits are not pushed over MCP. Subscribe with GET /teams/:teamId/events (text/event-stream, same Bearer token). Read the hearth://task-events resource for the exact URL and the event shape.",
 ].join("\n\n");
 
@@ -127,7 +128,7 @@ async function taskEventsText(app: FetchApp, authorization: string) {
     "Send the same Authorization: Bearer token and Accept: text/event-stream.",
     urls,
     "Through the web origin, prefix the path with /api.",
-    "The event name is created, updated, completed, cancelled, or deleted. data is JSON with type, teamId, taskId, at, and task (the same task object as GET /tasks, including source and links).",
+    "The event name is created, updated, completed, cancelled, or deleted. data is JSON with type, teamId, taskId, at, and task (the same task object as GET /tasks, including key, source, and links).",
     "On deleted, task is that row on the process that removed it, and null on another process because the row is already gone. taskId is enough to drop it.",
     "event ready means the subscription is on. Lines starting with ':' are keepalives. event reconnect means open the URL again and refetch with list_tasks.",
     "There is no backlog. An idempotent replay does not emit another created event.",
@@ -149,7 +150,7 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "create_task",
     {
       description:
-        "Create one task (POST /tasks), one project step per call. The title is one next action on one team. do_now is a human owner. Present Do now, Delegate, Schedule, or Later, not Important or Urgent. Prefer a source link. Active next actions are action do_now, delegate, or schedule — several may share a project. Future or dependent steps use action later unless that step is explicitly active. Omit action to take the important × urgent suggestion (neither suggests later). idempotencyKey is sent as the Idempotency-Key header. The same key and body, for this bot, returns the original task for 24 hours. A different body with that key is rejected. owner, when type bot, must be a bot registered on the team, this token, or the connector grant. waitingOn is required when action is delegate and the owner is not a bot. A bot owner may omit waitingOn. Omit owner and this token becomes the owner. projectId and areaId link a project or an area on the same team. source, when set, is { type: \"email\" | \"url\", href, label?, externalId? }. href is an http(s) URL. For Gmail, type is email and href is the mail.google.com deep link. calendarEventId is an event id or an http(s) calendar URL. On a schedule task it clears needsCalendar, and dueAt (the event time) is required with it. Hearth does not create the Google event. Create it, then send the id or URL with dueAt.",
+        "Create one task (POST /tasks), one project step per call. The title is one next action on one team. do_now is a human owner. Present Do now, Delegate, Schedule, or Later, not Important or Urgent. Prefer a source link. Active next actions are action do_now, delegate, or schedule — several may share a project. Future or dependent steps use action later unless that step is explicitly active. Omit action to take the important × urgent suggestion (neither suggests later). idempotencyKey is sent as the Idempotency-Key header. The same key and body, for this bot, returns the original task for 24 hours and does not take another number. A different body with that key is rejected. The task comes back with key, such as J-142. owner, when type bot, must be a bot registered on the team, this token, or the connector grant. waitingOn is required when action is delegate and the owner is not a bot. A bot owner may omit waitingOn. Omit owner and this token becomes the owner. projectId and areaId link a project or an area on the same team. source, when set, is { type: \"email\" | \"url\", href, label?, externalId? }. href is an http(s) URL. For Gmail, type is email and href is the mail.google.com deep link. calendarEventId is an event id or an http(s) calendar URL. On a schedule task it clears needsCalendar, and dueAt (the event time) is required with it. Hearth does not create the Google event. Create it, then send the id or URL with dueAt.",
       inputSchema: createTaskToolSchema,
     },
     async ({ idempotencyKey, ...body }) => {
@@ -168,12 +169,12 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "update_task",
     {
       description:
-        "Update a task (PATCH /tasks/:id). Set action to move a project step between an active front (do_now, delegate, schedule) and later. do_now is a human owner. Several active fronts on one project are allowed. Status cannot be changed here. Complete the task with complete_task, or cancel it with cancel_task. owner, when type bot, must be a bot registered on the team, this token, or the connector grant. waitingOn is required when the task is delegate and the owner is not a bot. A bot owner may set waitingOn to null. Pass projectId or areaId as a uuid to set that link, or null to clear it. Omit either field to leave it unchanged. source replaces the link; null clears it. Omit source to leave the link unchanged. calendarEventId sets the event id or calendar URL after you create the Google event, or null to clear it. A schedule task with a calendar event needs dueAt.",
+        "Update a task (PATCH /tasks/:id). id may be a UUID or a key like J-142. Set action to move a project step between an active front (do_now, delegate, schedule) and later. do_now is a human owner. Several active fronts on one project are allowed. Status cannot be changed here. Complete the task with complete_task, or cancel it with cancel_task. owner, when type bot, must be a bot registered on the team, this token, or the connector grant. waitingOn is required when the task is delegate and the owner is not a bot. A bot owner may set waitingOn to null. Pass projectId or areaId as a uuid to set that link, or null to clear it. Omit either field to leave it unchanged. source replaces the link; null clears it. Omit source to leave the link unchanged. calendarEventId sets the event id or calendar URL after you create the Google event, or null to clear it. A schedule task with a calendar event needs dueAt.",
       inputSchema: updateTaskToolSchema,
     },
     async ({ id, ...patch }) => {
       const parsed = updateTaskSchema.parse(patch);
-      return asTool(await callApi(app, authorization, `/tasks/${id}`, {
+      return asTool(await callApi(app, authorization, `/tasks/${encodeURIComponent(id)}`, {
         method: httpOperations.updateTask.method,
         headers: { "content-type": "application/json" },
         body: JSON.stringify(parsed),
@@ -185,11 +186,11 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "complete_task",
     {
       description:
-        "Mark a task done and record a short outcome in the same turn you finish the work (POST /tasks/:id/complete). If the task has a linked page, put the key decision or finding in that outcome, one short sentence. The page may be private to James, and other bots cannot open it.",
+        "Mark a task done and record a short outcome in the same turn you finish the work (POST /tasks/:id/complete). id may be a UUID or a key like J-142. If the task has a linked page, put the key decision or finding in that outcome, one short sentence. The page may be private to James, and other bots cannot open it.",
       inputSchema: completeTaskToolSchema,
     },
     async ({ id, outcome }) =>
-      asTool(await callApi(app, authorization, `/tasks/${id}/complete`, {
+      asTool(await callApi(app, authorization, `/tasks/${encodeURIComponent(id)}/complete`, {
         method: httpOperations.completeTask.method,
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ outcome }),
@@ -200,12 +201,12 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "cancel_task",
     {
       description:
-        'Soft-cancel a task and keep the row (POST /tasks/:id/cancel). Optional outcome; the default is "cancelled". The task leaves open lists and the morning queue. Emits a cancelled event. Use this rather than delete_task when the work simply stopped.',
+        'Soft-cancel a task and keep the row (POST /tasks/:id/cancel). id may be a UUID or a key like J-142. Optional outcome; the default is "cancelled". The task leaves open lists and the morning queue. Emits a cancelled event. Use this rather than delete_task when the work simply stopped.',
       inputSchema: cancelTaskToolSchema,
     },
     async ({ id, outcome }) => {
       const parsed = cancelTaskSchema.parse(outcome === undefined ? {} : { outcome });
-      return asTool(await callApi(app, authorization, `/tasks/${id}/cancel`, {
+      return asTool(await callApi(app, authorization, `/tasks/${encodeURIComponent(id)}/cancel`, {
         method: httpOperations.cancelTask.method,
         headers: { "content-type": "application/json" },
         body: JSON.stringify(parsed),
@@ -217,23 +218,23 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "delete_task",
     {
       description:
-        "Hard-delete a task (DELETE /tasks/:id). For a mistake or a duplicate, not for work that stopped. Emits a deleted event. The row is gone, and an Idempotency-Key that pointed at it can be used again.",
+        "Hard-delete a task (DELETE /tasks/:id). id may be a UUID or a key like J-142. For a mistake or a duplicate, not for work that stopped. Emits a deleted event. The row is gone, and an Idempotency-Key that pointed at it can be used again.",
       inputSchema: deleteTaskToolSchema,
     },
     async ({ id }) =>
-      asTool(await callApi(app, authorization, `/tasks/${id}`, { method: httpOperations.deleteTask.method })),
+      asTool(await callApi(app, authorization, `/tasks/${encodeURIComponent(id)}`, { method: httpOperations.deleteTask.method })),
   );
 
   server.registerTool(
     "add_task_link",
     {
       description:
-        "Attach an http(s) link to a task (POST /tasks/:id/links). title is the label a person sees. The same taskId and url returns the existing link and does not add a second row. Use this for a page that holds options, a comparison, or research, instead of a long detail. url must be http or https.",
+        "Attach an http(s) link to a task (POST /tasks/:id/links). taskId may be a UUID or a key like J-142. title is the label a person sees. The same taskId and url returns the existing link and does not add a second row. Use this for a page that holds options, a comparison, or research, instead of a long detail. url must be http or https.",
       inputSchema: addTaskLinkToolSchema,
     },
     async ({ taskId, ...body }) => {
       const parsed = createAttachedLinkSchema.parse(body);
-      return asTool(await callApi(app, authorization, `/tasks/${taskId}/links`, {
+      return asTool(await callApi(app, authorization, `/tasks/${encodeURIComponent(taskId)}/links`, {
         method: httpOperations.createTaskLink.method,
         headers: { "content-type": "application/json" },
         body: JSON.stringify(parsed),
@@ -245,11 +246,11 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "remove_task_link",
     {
       description:
-        "Remove one link from a task (DELETE /tasks/:id/links/:linkId). linkId is the link id from the task's links. The task stays.",
+        "Remove one link from a task (DELETE /tasks/:id/links/:linkId). taskId may be a UUID or a key like J-142. linkId is the link id from the task's links. The task stays.",
       inputSchema: removeTaskLinkToolSchema,
     },
     async ({ taskId, linkId }) =>
-      asTool(await callApi(app, authorization, `/tasks/${taskId}/links/${linkId}`, {
+      asTool(await callApi(app, authorization, `/tasks/${encodeURIComponent(taskId)}/links/${encodeURIComponent(linkId)}`, {
         method: httpOperations.deleteTaskLink.method,
       })),
   );
@@ -258,12 +259,12 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "snooze_task",
     {
       description:
-        "Snooze an open task until an ISO time in the future (POST /tasks/:id/snooze). The action stays as it is, including do_now. The task leaves lists and the morning queue until then. until must be later than now.",
+        "Snooze an open task until an ISO time in the future (POST /tasks/:id/snooze). id may be a UUID or a key like J-142. The action stays as it is, including do_now. The task leaves lists and the morning queue until then. until must be later than now.",
       inputSchema: snoozeTaskToolSchema,
     },
     async ({ id, until }) => {
       const parsed = snoozeTaskSchema.parse({ until });
-      return asTool(await callApi(app, authorization, `/tasks/${id}/snooze`, {
+      return asTool(await callApi(app, authorization, `/tasks/${encodeURIComponent(id)}/snooze`, {
         method: httpOperations.snoozeTask.method,
         headers: { "content-type": "application/json" },
         body: JSON.stringify(parsed),
@@ -275,11 +276,11 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "unsnooze_task",
     {
       description:
-        "Clear a snooze (POST /tasks/:id/unsnooze). snoozedUntil becomes null and the task returns to its action lane. A task that is not snoozed is returned unchanged.",
+        "Clear a snooze (POST /tasks/:id/unsnooze). id may be a UUID or a key like J-142. snoozedUntil becomes null and the task returns to its action lane. A task that is not snoozed is returned unchanged.",
       inputSchema: unsnoozeTaskToolSchema,
     },
     async ({ id }) =>
-      asTool(await callApi(app, authorization, `/tasks/${id}/unsnooze`, {
+      asTool(await callApi(app, authorization, `/tasks/${encodeURIComponent(id)}/unsnooze`, {
         method: httpOperations.unsnoozeTask.method,
         headers: { "content-type": "application/json" },
         body: "{}",
@@ -290,7 +291,7 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "list_tasks",
     {
       description:
-        "List tasks (GET /tasks). Each task includes action, snoozedUntil, source (an email or url link, or null), links (http(s) pages attached to the task), plus project and area when set. Tasks with snoozedUntil still in the future are omitted unless includeSnoozed is true. Snoozing does not change action. Filter projectId together with action to separate a project's active steps (do_now, delegate, schedule) from later support steps. A bot's open delegate work is action=delegate, status=open, and owner=bot:<uuid>. Other filters: teamId, status (open, done, or cancelled), important, urgent, needsCalendar, owner (user:<uuid> or bot:<uuid>), dueBefore, areaId, mine. Open schedule tasks that still need a calendar are action=schedule, status=open, and needsCalendar=true. A check-in is an open schedule with dueAt in the past (dueBefore now), whether or not a calendar is attached. For another bot, add owner=bot:<uuid>. Omit teamId to use this bot's team. status=open hides cancelled tasks. status=cancelled is the audit list.",
+        "List tasks (GET /tasks). Each task includes key (such as J-142), action, snoozedUntil, source (an email or url link, or null), links (http(s) pages attached to the task), plus project and area when set. Tasks with snoozedUntil still in the future are omitted unless includeSnoozed is true. Snoozing does not change action. Filter projectId together with action to separate a project's active steps (do_now, delegate, schedule) from later support steps. A bot's open delegate work is action=delegate, status=open, and owner=bot:<uuid>. Other filters: teamId, status (open, done, or cancelled), important, urgent, needsCalendar, owner (user:<uuid> or bot:<uuid>), dueBefore, areaId, mine. Open schedule tasks that still need a calendar are action=schedule, status=open, and needsCalendar=true. A check-in is an open schedule with dueAt in the past (dueBefore now), whether or not a calendar is attached. For another bot, add owner=bot:<uuid>. Omit teamId to use this bot's team. status=open hides cancelled tasks. status=cancelled is the audit list.",
       inputSchema: listTasksQuerySchema,
     },
     async (query) => asTool(await callApi(app, authorization, `${httpOperations.listTasks.path}${queryString(query)}`)),

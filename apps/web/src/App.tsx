@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes } from "react-router";
+import { Navigate, Route, Routes, useLocation } from "react-router";
 import type { ReactNode } from "react";
 import { useAuth } from "@/auth";
 import { Archive } from "@/pages/Archive";
@@ -23,6 +23,7 @@ export function App() {
       >
         <Route path="/" element={<Navigate to="/tasks" replace />} />
         <Route path="/tasks" element={<Tasks />} />
+        <Route path="/t/:key" element={<Tasks />} />
         <Route path="/projects" element={<Projects />} />
         <Route path="/projects/:projectId" element={<Projects />} />
         <Route path="/archive" element={<Archive />} />
@@ -36,7 +37,11 @@ export function App() {
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
+  const location = useLocation();
   if (loading) return <div className="min-h-dvh bg-black" />;
-  if (!user) return <Navigate to="/signin" replace />;
+  if (!user) {
+    const next = `${location.pathname}${location.search}`;
+    return <Navigate to={`/signin?next=${encodeURIComponent(next)}`} replace />;
+  }
   return children;
 }

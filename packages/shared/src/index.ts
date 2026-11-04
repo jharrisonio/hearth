@@ -348,6 +348,10 @@ export interface DeletedLink {
 
 export const taskSchema = z.object({
   id: z.string().uuid(),
+  /** Public id, team key plus number, such as J-142. */
+  key: z.string().regex(/^[A-Z]+-\d+$/),
+  /** Sequence on the team. Combined with the team key to make `key`. */
+  number: z.number().int().positive(),
   teamId: z.string().uuid(),
   title: z.string(),
   detail: z.string().nullable(),
@@ -708,36 +712,48 @@ export const createTaskToolSchema = createTaskSchema.extend({
 });
 export type CreateTaskToolInput = z.infer<typeof createTaskToolSchema>;
 
+const taskRefSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(80)
+  .refine(
+    (value) =>
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value) ||
+      /^[A-Za-z]+-\d+$/.test(value),
+    "Task id must be a UUID or a key like J-142.",
+  );
+
 export const updateTaskToolSchema = updateTaskSchema.extend({
-  id: z.string().uuid(),
+  id: taskRefSchema,
 });
 export type UpdateTaskToolInput = z.infer<typeof updateTaskToolSchema>;
 
 export const completeTaskToolSchema = completeTaskSchema.extend({
-  id: z.string().uuid(),
+  id: taskRefSchema,
 });
 export type CompleteTaskToolInput = z.infer<typeof completeTaskToolSchema>;
 
 export const cancelTaskToolSchema = cancelTaskSchema.extend({
-  id: z.string().uuid(),
+  id: taskRefSchema,
 });
 export type CancelTaskToolInput = z.infer<typeof cancelTaskToolSchema>;
 
 export const deleteTaskToolSchema = z
   .object({
-    id: z.string().uuid(),
+    id: taskRefSchema,
   })
   .strict();
 export type DeleteTaskToolInput = z.infer<typeof deleteTaskToolSchema>;
 
 export const snoozeTaskToolSchema = snoozeTaskSchema.extend({
-  id: z.string().uuid(),
+  id: taskRefSchema,
 });
 export type SnoozeTaskToolInput = z.infer<typeof snoozeTaskToolSchema>;
 
 export const unsnoozeTaskToolSchema = z
   .object({
-    id: z.string().uuid(),
+    id: taskRefSchema,
   })
   .strict();
 export type UnsnoozeTaskToolInput = z.infer<typeof unsnoozeTaskToolSchema>;
@@ -745,7 +761,7 @@ export type UnsnoozeTaskToolInput = z.infer<typeof unsnoozeTaskToolSchema>;
 /** add_task_link. The same task and url returns the existing row. */
 export const addTaskLinkToolSchema = z
   .object({
-    taskId: z.string().uuid(),
+    taskId: taskRefSchema,
     title: linkTitle,
     url: linkUrl,
   })
@@ -754,7 +770,7 @@ export type AddTaskLinkToolInput = z.infer<typeof addTaskLinkToolSchema>;
 
 export const removeTaskLinkToolSchema = z
   .object({
-    taskId: z.string().uuid(),
+    taskId: taskRefSchema,
     linkId: z.string().uuid(),
   })
   .strict();

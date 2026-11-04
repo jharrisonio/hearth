@@ -165,7 +165,8 @@ async function insertIfEmpty(
 ) {
   const [row] = await db.select({ n: count() }).from(tasks).where(eq(tasks.teamId, teamId));
   if (Number(row?.n ?? 0) > 0) return;
-  await db.insert(tasks).values(rows);
+  await db.insert(tasks).values(rows.map((row, index) => ({ ...row, number: index + 1 })));
+  await db.update(teams).set({ nextTaskNumber: rows.length }).where(eq(teams.id, teamId));
 }
 
 function daysFromNow(days: number) {

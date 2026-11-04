@@ -2,13 +2,18 @@ import { taskSourceSchema, type AttachedLink, type Task, type TaskSource } from 
 import { asc, eq, inArray } from "drizzle-orm";
 import { db } from "./db.js";
 import { iso } from "./http.js";
-import { areas, projects, taskLinks, tasks } from "./schema.js";
+import { areas, projects, taskLinks, tasks, teams } from "./schema.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 
-export function toTask(row: TaskRow, names: { projectName: string | null; areaName: string | null }): Task {
+export function toTask(
+  row: TaskRow,
+  names: { projectName: string | null; areaName: string | null; teamKey: string },
+): Task {
   return {
     id: row.id,
+    key: `${names.teamKey}-${row.number}`,
+    number: row.number,
     teamId: row.teamId,
     title: row.title,
     detail: row.detail,
@@ -85,8 +90,10 @@ export function taskViews() {
       task: tasks,
       projectName: projects.name,
       areaName: areas.name,
+      teamKey: teams.key,
     })
     .from(tasks)
+    .innerJoin(teams, eq(teams.id, tasks.teamId))
     .leftJoin(projects, eq(projects.id, tasks.projectId))
     .leftJoin(areas, eq(areas.id, tasks.areaId));
 }
@@ -98,6 +105,11 @@ export async function loadTaskView(id: string): Promise<Task | null> {
   return task ?? null;
 }
 
-export function viewTask(row: { task: TaskRow; projectName: string | null; areaName: string | null }) {
+export function viewTask(row: {
+  task: TaskRow;
+  projectName: string | null;
+  areaName: string | null;
+  teamKey: string;
+}) {
   return toTask(row.task, row);
 }
