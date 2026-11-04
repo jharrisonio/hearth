@@ -119,27 +119,37 @@ export const api = {
   updateArea: (teamId: string, id: string, body: { name?: string; archived?: boolean }) =>
     request<AreaSummary>(`/teams/${teamId}/areas/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   tasks: (query: TaskQuery) => request<TaskList>(`/tasks${queryString(query)}`),
+  task: (id: string) => request<Task>(taskPath(id)),
   doImmediately: (teamId?: string) =>
     request<TaskList>(`/tasks/do-immediately${teamId ? `?teamId=${teamId}` : ""}`),
   createTask: (body: unknown) => request<Task>("/tasks", { method: "POST", body: JSON.stringify(body) }),
   updateTask: (id: string, body: unknown, keepalive = false) =>
-    request<Task>(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(body), keepalive }),
+    request<Task>(taskPath(id), { method: "PATCH", body: JSON.stringify(body), keepalive }),
   completeTask: (id: string, outcome: string) =>
-    request<Task>(`/tasks/${id}/complete`, { method: "POST", body: JSON.stringify({ outcome }) }),
+    request<Task>(taskPath(id, "/complete"), { method: "POST", body: JSON.stringify({ outcome }) }),
   cancelTask: (id: string, outcome?: string) =>
-    request<Task>(`/tasks/${id}/cancel`, {
+    request<Task>(taskPath(id, "/cancel"), {
       method: "POST",
       body: JSON.stringify(outcome === undefined ? {} : { outcome }),
     }),
-  reopenTask: (id: string) => request<Task>(`/tasks/${id}/reopen`, { method: "POST", body: "{}" }),
+  reopenTask: (id: string) => request<Task>(taskPath(id, "/reopen"), { method: "POST", body: "{}" }),
   snoozeTask: (id: string, until: string) =>
-    request<Task>(`/tasks/${id}/snooze`, { method: "POST", body: JSON.stringify({ until }) }),
-  unsnoozeTask: (id: string) => request<Task>(`/tasks/${id}/unsnooze`, { method: "POST", body: "{}" }),
-  deleteTask: (id: string) => request<DeletedTask>(`/tasks/${id}`, { method: "DELETE" }),
+    request<Task>(taskPath(id, "/snooze"), { method: "POST", body: JSON.stringify({ until }) }),
+  unsnoozeTask: (id: string) => request<Task>(taskPath(id, "/unsnooze"), { method: "POST", body: "{}" }),
+  deleteTask: (id: string) => request<DeletedTask>(taskPath(id), { method: "DELETE" }),
   addTaskLink: (taskId: string, body: { title: string; url: string }) =>
-    request<AttachedLink>(`/tasks/${taskId}/links`, { method: "POST", body: JSON.stringify(body) }),
+    request<AttachedLink>(taskPath(taskId, "/links"), { method: "POST", body: JSON.stringify(body) }),
   updateTaskLink: (taskId: string, linkId: string, body: { title?: string; url?: string }) =>
-    request<AttachedLink>(`/tasks/${taskId}/links/${linkId}`, { method: "PATCH", body: JSON.stringify(body) }),
+    request<AttachedLink>(`${taskPath(taskId, "/links")}/${encodeURIComponent(linkId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
   removeTaskLink: (taskId: string, linkId: string) =>
-    request<{ id: string; deleted: true }>(`/tasks/${taskId}/links/${linkId}`, { method: "DELETE" }),
+    request<{ id: string; deleted: true }>(`${taskPath(taskId, "/links")}/${encodeURIComponent(linkId)}`, {
+      method: "DELETE",
+    }),
 };
+
+function taskPath(id: string, suffix = "") {
+  return `/tasks/${encodeURIComponent(id)}${suffix}`;
+}

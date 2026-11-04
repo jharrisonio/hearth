@@ -43,7 +43,7 @@ function SettingsIcon() {
 export function TabBar({ settingsTo }: { settingsTo: string }) {
   const path = useLocation().pathname;
   const tabs = [
-    { to: "/tasks", label: "Tasks", icon: TasksIcon, active: path === "/tasks" },
+    { to: "/tasks", label: "Tasks", icon: TasksIcon, active: path === "/tasks" || path.startsWith("/t/") },
     { to: "/projects", label: "Projects", icon: ProjectsIcon, active: path.startsWith("/projects") },
     { to: "/archive", label: "Archive", icon: ArchiveIcon, active: path.startsWith("/archive") },
     {

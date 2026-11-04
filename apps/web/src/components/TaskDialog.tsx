@@ -132,6 +132,7 @@ function TaskForm({
   const [deleting, setDeleting] = useState(false);
   const [panel, setPanel] = useState<PropertyPanel | null>(null);
   const [snoozedUntil, setSnoozedUntil] = useState<string | null>(task?.snoozedUntil ?? null);
+  const [copied, setCopied] = useState(false);
   const parsedOwner = parseOwnerKey(owner);
   const waitingRequired = delegateRequiresWaitingOn(action, parsedOwner);
   const ownerChoices = new Set([
@@ -504,6 +505,18 @@ function TaskForm({
     }
   }
 
+  function copyTaskLink() {
+    if (!task?.key) return;
+    const url = `https://hearth.jharrison.io/t/${task.key}`;
+    void navigator.clipboard.writeText(url).then(
+      () => {
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1200);
+      },
+      () => setError("Could not copy the link."),
+    );
+  }
+
   const calendarLink = action === "schedule" ? calendarHref(calendarEventId) : null;
   const showCheckIn =
     status === "open" && action === "schedule" && needsCheckIn({ status: "open", action, dueAt: fromLocalInput(dueAt) });
@@ -513,7 +526,19 @@ function TaskForm({
     <form className="flex min-h-0 flex-1 flex-col" onSubmit={(event) => void onSubmit(event)}>
       <header className="shrink-0 px-7 pt-[env(safe-area-inset-top)]">
         <div className="grid h-16 grid-cols-[minmax(0,1fr)_auto_44px] items-center">
-          <DialogTitle className={task ? "sr-only" : "mb-0"}>{task ? title || "Task" : "New task"}</DialogTitle>
+          <div className="flex min-w-0 items-center">
+            <DialogTitle className={task ? "sr-only" : "mb-0"}>{task ? title || "Task" : "New task"}</DialogTitle>
+            {task?.key ? (
+              <button
+                type="button"
+                onClick={copyTaskLink}
+                aria-label={copied ? "Copied" : `Copy link to ${task.key}`}
+                className="truncate text-left text-[11px] font-normal tracking-[0.16em] text-[#a8a8a8] hover:text-white"
+              >
+                {copied ? "Copied" : task.key}
+              </button>
+            ) : null}
+          </div>
           {task && saveLabel ? (
             <p className="px-3 text-[10px] font-normal uppercase tracking-[0.32em] text-[#a8a8a8]" aria-live="polite">
               {saveLabel}
