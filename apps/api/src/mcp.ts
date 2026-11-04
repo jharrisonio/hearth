@@ -11,6 +11,9 @@ import {
   createAttachedLinkSchema,
   createTaskToolSchema,
   deleteTaskToolSchema,
+  snoozeTaskSchema,
+  snoozeTaskToolSchema,
+  unsnoozeTaskToolSchema,
   removeTaskLinkToolSchema,
   doImmediatelyQuerySchema,
   httpOperations,
@@ -47,7 +50,7 @@ const SERVER_VERSION = "0.1.0";
 const MCP_INSTRUCTIONS = [
   "Standing rules for every connected Hearth bot. Follow them without a pasted brief. hearth_help returns this same text.",
   "Teams. This token only sees lists it was granted. Personal and household never mix: do not copy or mirror a task from one list onto the other. Spare and other work stay out of Hearth unless James says to put that item here.",
-  "Actions. Set action to do_now, delegate, schedule, or later. Present those to people as Do now, Delegate, Schedule, and Later. Do not present Important or Urgent as labels. Those flags only sort the queue. Omitting action stores a suggestion from the flags; set the action yourself. do_now is a human owner doing it. delegate is a bot or an outsider. A bot owner has waitingOn null, because the bot is who acts. An outsider needs waitingOn, the person or office you are waiting on. Omit owner and this token becomes the owner. Hand work to another bot with a registered bot id. schedule needs dueAt, the event time, and calendarEventId. Hearth does not create the Google event. Create it with your calendar connector, then PATCH calendarEventId and dueAt. Until calendarEventId is set, needsCalendar stays true. An open schedule with dueAt in the past is a check-in: complete_task, cancel_task, or update dueAt and calendarEventId. later is a future or dependent step. It stays out of both morning queues until the action changes.",
+  "Actions. Set action to do_now, delegate, schedule, or later. Present those to people as Do now, Delegate, Schedule, and Later. Do not present Important or Urgent as labels. Those flags only sort the queue. Omitting action stores a suggestion from the flags; set the action yourself. do_now is a human owner doing it. delegate is a bot or an outsider. A bot owner has waitingOn null, because the bot is who acts. An outsider needs waitingOn, the person or office you are waiting on. Omit owner and this token becomes the owner. Hand work to another bot with a registered bot id. schedule needs dueAt, the event time, and calendarEventId. Hearth does not create the Google event. Create it with your calendar connector, then PATCH calendarEventId and dueAt. Until calendarEventId is set, needsCalendar stays true. An open schedule with dueAt in the past is a check-in: complete_task, cancel_task, or update dueAt and calendarEventId. later is a future or dependent step. It stays out of both morning queues until the action changes. Bots may snooze a started do_now task instead of scheduling it.",
   "Projects and areas. A project is a multi-step outcome. An area is a life domain such as House or Finance. Link them with projectId and areaId. A task title is one next action, not the whole outcome. On a project, do_now, delegate, and schedule are active next actions and several may run at once. Future steps are separate tasks with action later. Project notes hold the plan, not the step list.",
   "Queues. list_do_immediately follows the caller and matches the implementation. A human morning queue is inMorningQueue: open do_now; open schedule that still needs a calendar or is a check-in (dueAt strictly in the past); and delegate tasks whose owner is not a bot when dueAt is due or overdue, or when dueAt is empty and the task is more than three days old. Bot-owned delegates stay out of that queue. Bot-owned schedule tasks stay in, so a person can attach the calendar or check in. A bot morning queue is inBotQueue: open delegate tasks this token owns, at any dueAt, plus schedule tasks this token owns that still need a calendar or are a check-in. do_now stays on the human queue. Another bot's delegate work is list_tasks with action=delegate, status=open, and owner=bot:<id>. That bot's check-ins use action=schedule, status=open, owner=bot:<id>, and dueBefore now. List the ones that still need a calendar with needsCalendar=true instead of dueBefore.",
   "Capture and finish. Pass idempotencyKey on create_task. It is sent as Idempotency-Key. The same key and body, for this bot, return the original task for 24 hours. A different body with that key is rejected. Prefer a source link when the task came from an email or a page: { type: \"email\" | \"url\", href, label?, externalId? }. href is an http(s) URL. For Gmail, href is https://mail.google.com/mail/u/0/#all/<threadId> and externalId is the message or thread id. Pass source: null on update_task to clear it. When you finish the work, call complete_task in the same turn with a short outcome. cancel_task is a soft cancel and keeps the row, with an outcome (the default is \"cancelled\"). delete_task is a hard delete for a mistake or a duplicate. Archiving a project is rejected while any task on it is still open. Complete or cancel those tasks first.",
@@ -252,10 +255,42 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
   );
 
   server.registerTool(
+    "snooze_task",
+    {
+      description:
+        "Snooze an open task until an ISO time in the future (POST /tasks/:id/snooze). The action stays as it is, including do_now. The task leaves lists and the morning queue until then. until must be later than now.",
+      inputSchema: snoozeTaskToolSchema,
+    },
+    async ({ id, until }) => {
+      const parsed = snoozeTaskSchema.parse({ until });
+      return asTool(await callApi(app, authorization, `/tasks/${id}/snooze`, {
+        method: httpOperations.snoozeTask.method,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(parsed),
+      }));
+    },
+  );
+
+  server.registerTool(
+    "unsnooze_task",
+    {
+      description:
+        "Clear a snooze (POST /tasks/:id/unsnooze). snoozedUntil becomes null and the task returns to its action lane. A task that is not snoozed is returned unchanged.",
+      inputSchema: unsnoozeTaskToolSchema,
+    },
+    async ({ id }) =>
+      asTool(await callApi(app, authorization, `/tasks/${id}/unsnooze`, {
+        method: httpOperations.unsnoozeTask.method,
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      })),
+  );
+
+  server.registerTool(
     "list_tasks",
     {
       description:
-        "List tasks (GET /tasks). Each task includes action, source (an email or url link, or null), links (http(s) pages attached to the task), plus project and area when set. Filter projectId together with action to separate a project's active steps (do_now, delegate, schedule) from later support steps. A bot's open delegate work is action=delegate, status=open, and owner=bot:<uuid>. Other filters: teamId, status (open, done, or cancelled), important, urgent, needsCalendar, owner (user:<uuid> or bot:<uuid>), dueBefore, areaId, mine. Open schedule tasks that still need a calendar are action=schedule, status=open, and needsCalendar=true. A check-in is an open schedule with dueAt in the past (dueBefore now), whether or not a calendar is attached. For another bot, add owner=bot:<uuid>. Omit teamId to use this bot's team. status=open hides cancelled tasks. status=cancelled is the audit list.",
+        "List tasks (GET /tasks). Each task includes action, snoozedUntil, source (an email or url link, or null), links (http(s) pages attached to the task), plus project and area when set. Tasks with snoozedUntil still in the future are omitted unless includeSnoozed is true. Snoozing does not change action. Filter projectId together with action to separate a project's active steps (do_now, delegate, schedule) from later support steps. A bot's open delegate work is action=delegate, status=open, and owner=bot:<uuid>. Other filters: teamId, status (open, done, or cancelled), important, urgent, needsCalendar, owner (user:<uuid> or bot:<uuid>), dueBefore, areaId, mine. Open schedule tasks that still need a calendar are action=schedule, status=open, and needsCalendar=true. A check-in is an open schedule with dueAt in the past (dueBefore now), whether or not a calendar is attached. For another bot, add owner=bot:<uuid>. Omit teamId to use this bot's team. status=open hides cancelled tasks. status=cancelled is the audit list.",
       inputSchema: listTasksQuerySchema,
     },
     async (query) => asTool(await callApi(app, authorization, `${httpOperations.listTasks.path}${queryString(query)}`)),
@@ -265,7 +300,7 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
     "list_do_immediately",
     {
       description:
-        "Open work for the caller (GET /tasks/do-immediately). This token receives inBotQueue: open delegate tasks it owns, plus schedule tasks it owns that still need a calendar or are due for check-in (dueAt in the past, calendar attached or not). It does not include do_now or another bot's tasks. A human receives inMorningQueue: open do_now, schedule that still needs a calendar or is due for check-in, and overdue delegate follow-ups whose owner is not a bot. Done, cancelled, and action later stay out, including future steps on a project. Optional teamId.",
+        "Open work for the caller (GET /tasks/do-immediately). This token receives inBotQueue: open delegate tasks it owns, plus schedule tasks it owns that still need a calendar or are due for check-in (dueAt in the past, calendar attached or not). It does not include do_now or another bot's tasks. A human receives inMorningQueue: open do_now, schedule that still needs a calendar or is due for check-in, and overdue delegate follow-ups whose owner is not a bot. Done, cancelled, snoozed, and action later stay out, including future steps on a project. A snoozed task returns when snoozedUntil passes. Optional teamId.",
       inputSchema: doImmediatelyQuerySchema,
     },
     async (query) =>

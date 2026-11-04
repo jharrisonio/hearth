@@ -7,6 +7,7 @@ import {
   followUpFrom,
   resolveNeedsCalendar,
   scheduleRequiresDueAt,
+  snoozeTaskSchema,
   suggestAction,
   taskStatuses,
   updateTaskSchema,
@@ -47,6 +48,7 @@ const BLOCKED_UPDATE = new Set([
   "createdAt",
   "updatedAt",
   "createdBy",
+  "snoozedUntil",
 ]);
 
 export const taskRoutes = new Hono<AppEnv>();
@@ -63,6 +65,7 @@ taskRoutes.get("/do-immediately", async (c) => {
       and(
         inArray(tasks.teamId, ids),
         eq(tasks.status, "open"),
+        notCurrentlySnoozed(),
         actor.type === "bot" ? botQueueFilter(actor.id) : morningQueueFilter(),
       ),
     )
@@ -125,6 +128,8 @@ taskRoutes.get("/", async (c) => {
     filters.push(eq(tasks.ownerType, actor.type));
     filters.push(eq(tasks.ownerId, actor.id));
   }
+  const includeSnoozed = parseBool(query.includeSnoozed, "includeSnoozed");
+  if (!includeSnoozed) filters.push(notCurrentlySnoozed());
 
   const rows = await taskViews()
     .where(and(...filters))
@@ -223,6 +228,7 @@ taskRoutes.patch("/:id", async (c) => {
       sortOrder: body.sortOrder !== undefined ? body.sortOrder : existing.sortOrder,
       source: body.source !== undefined ? body.source : existing.source,
       dueAt,
+      snoozedUntil: acknowledgeWake(existing.snoozedUntil) ? null : existing.snoozedUntil,
       updatedAt: new Date(),
     })
     .where(eq(tasks.id, id))
@@ -314,6 +320,55 @@ taskRoutes.post("/:id/reopen", async (c) => {
       cancelledAt: null,
       updatedAt: now,
     })
+    .where(eq(tasks.id, id))
+    .returning();
+  if (!row) throw new HttpError(404, "not_found", "Task not found.");
+  const task = await loadTaskView(row.id);
+  if (!task) throw new HttpError(404, "not_found", "Task not found.");
+  await publishTaskEvent("updated", task);
+  return c.json(task);
+});
+
+taskRoutes.post("/:id/snooze", async (c) => {
+  const id = c.req.param("id");
+  requireUuid(id, "id");
+  const body = parseBody(snoozeTaskSchema, await readJson(c));
+  const existing = await loadTask(id);
+  await requireTeam(c.get("actor"), existing.teamId);
+  if (existing.status !== "open") {
+    throw new HttpError(409, "not_open", "Only an open task can be snoozed.");
+  }
+  const until = new Date(body.until);
+  if (Number.isNaN(until.getTime()) || until.getTime() <= Date.now()) {
+    throw new HttpError(400, "until_not_future", "until must be a time in the future.");
+  }
+  const now = new Date();
+  const [row] = await db
+    .update(tasks)
+    .set({ snoozedUntil: until, updatedAt: now })
+    .where(eq(tasks.id, id))
+    .returning();
+  if (!row) throw new HttpError(404, "not_found", "Task not found.");
+  const task = await loadTaskView(row.id);
+  if (!task) throw new HttpError(404, "not_found", "Task not found.");
+  await publishTaskEvent("updated", task);
+  return c.json(task);
+});
+
+taskRoutes.post("/:id/unsnooze", async (c) => {
+  const id = c.req.param("id");
+  requireUuid(id, "id");
+  const existing = await loadTask(id);
+  await requireTeam(c.get("actor"), existing.teamId);
+  if (existing.snoozedUntil == null) {
+    const task = await loadTaskView(id);
+    if (!task) throw new HttpError(404, "not_found", "Task not found.");
+    return c.json(task);
+  }
+  const now = new Date();
+  const [row] = await db
+    .update(tasks)
+    .set({ snoozedUntil: null, updatedAt: now })
     .where(eq(tasks.id, id))
     .returning();
   if (!row) throw new HttpError(404, "not_found", "Task not found.");
@@ -478,6 +533,15 @@ function parseAction(value: string | undefined): Action | undefined {
   if (value === undefined) return undefined;
   if ((actions as readonly string[]).includes(value)) return value as Action;
   throw new HttpError(400, "invalid_query", "action must be do_now, delegate, schedule, or later.");
+}
+
+/** Snoozed means snoozed_until is strictly after now. A passed time is awake again. */
+function notCurrentlySnoozed() {
+  return sql`(${tasks.snoozedUntil} IS NULL OR ${tasks.snoozedUntil} <= now())`;
+}
+
+function acknowledgeWake(snoozedUntil: Date | null) {
+  return snoozedUntil != null && snoozedUntil.getTime() <= Date.now();
 }
 
 function parseStatus(value: string | undefined): TaskStatus | undefined {

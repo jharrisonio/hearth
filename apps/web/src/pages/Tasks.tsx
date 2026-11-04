@@ -1,4 +1,4 @@
-import { actions, type Action, type Task } from "@hearth/shared";
+import { actions, isBackFromSnooze, isSnoozed, SNOOZE_TIME_ZONE, type Action, type Task } from "@hearth/shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { useAuth } from "@/auth";
@@ -18,6 +18,7 @@ export function Tasks() {
   const [params, setParams] = useSearchParams();
   const { current, teamsLoading, teamsError, openListPicker, openTask, taskRevision } = useShell();
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const request = useRef(0);
@@ -32,7 +33,7 @@ export function Tasks() {
       return;
     }
     try {
-      const { tasks: next } = await api.tasks({ teamId: current.id, status: "open" });
+      const { tasks: next } = await api.tasks({ teamId: current.id, status: "open", includeSnoozed: true });
       if (id !== request.current) return;
       setTasks(next);
       setError(null);
@@ -60,8 +61,12 @@ export function Tasks() {
   }, [reload]);
 
   const visible = useMemo(
-    () => tasks.filter((task) => task.status === "open" && task.action === filter).sort(compareTasks),
+    () => tasks.filter((task) => task.status === "open" && task.action === filter && !isSnoozed(task)).sort(compareTasks),
     [tasks, filter],
+  );
+  const snoozed = useMemo(
+    () => tasks.filter((task) => task.status === "open" && isSnoozed(task)).sort((a, b) => (a.snoozedUntil ?? "").localeCompare(b.snoozedUntil ?? "")),
+    [tasks],
   );
 
   if (!user) return null;
@@ -123,6 +128,36 @@ export function Tasks() {
               ))}
             </ul>
           ) : null}
+          {snoozed.length > 0 ? (
+            <section className="mt-12">
+              <button
+                type="button"
+                className="text-[10px] font-normal uppercase tracking-[0.32em] text-[#a8a8a8] hover:text-white"
+                aria-expanded={snoozeOpen}
+                onClick={() => setSnoozeOpen((open) => !open)}
+              >
+                Snoozed · {snoozed.length}
+              </button>
+              {snoozeOpen ? (
+                <ul className="hearth-fade mt-4 flex flex-col">
+                  {snoozed.map((task) => (
+                    <li key={task.id} className="w-fit max-w-full py-[13px]">
+                      <button
+                        type="button"
+                        onClick={() => openTask(task, filter)}
+                        className="block max-w-full text-left"
+                      >
+                        <span className="block text-[18px] font-light leading-snug text-[#d6d6d6] hover:text-white">{task.title}</span>
+                        <span className="mt-1 block text-[13px] font-light text-[#a8a8a8]">
+                          Until {task.snoozedUntil ? formatVancouver(task.snoozedUntil) : ""}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </section>
+          ) : null}
         </div>
       </main>
     </div>
@@ -130,8 +165,23 @@ export function Tasks() {
 }
 
 function compareTasks(a: Task, b: Task) {
+  const aw = isBackFromSnooze(a) ? 0 : 1;
+  const bw = isBackFromSnooze(b) ? 0 : 1;
+  if (aw !== bw) return aw - bw;
   const ad = a.dueAt ? new Date(a.dueAt).getTime() : Number.POSITIVE_INFINITY;
   const bd = b.dueAt ? new Date(b.dueAt).getTime() : Number.POSITIVE_INFINITY;
   if (ad !== bd) return ad - bd;
   return a.title.localeCompare(b.title);
+}
+
+function formatVancouver(iso: string) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: SNOOZE_TIME_ZONE,
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(new Date(iso));
 }

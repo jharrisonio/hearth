@@ -2,6 +2,7 @@ import {
   calendarHref,
   delegateRequiresWaitingOn,
   isHttpUrl,
+  isBackFromSnooze,
   needsCheckIn,
   scheduleRequiresDueAt,
   type Action,
@@ -19,6 +20,7 @@ import {
 } from "@hearth/shared";
 import { useEffect, useLayoutEffect, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { CatalogPicker } from "@/components/CatalogPicker";
+import { SnoozeControl } from "@/components/SnoozeControl";
 import { Chips } from "@/components/Chips";
 import { PencilIcon } from "@/components/Icons";
 import { Button } from "@/components/ui/button";
@@ -129,6 +131,7 @@ function TaskForm({
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [panel, setPanel] = useState<PropertyPanel | null>(null);
+  const [snoozedUntil, setSnoozedUntil] = useState<string | null>(task?.snoozedUntil ?? null);
   const parsedOwner = parseOwnerKey(owner);
   const waitingRequired = delegateRequiresWaitingOn(action, parsedOwner);
   const ownerChoices = new Set([
@@ -136,6 +139,22 @@ function TaskForm({
     ...bots.map((bot) => ownerKey("bot", bot.id)),
   ]);
   const keepCurrentOwner = ownersLoaded && task != null && !ownerChoices.has(owner);
+
+  useEffect(() => {
+    if (!task || !isBackFromSnooze(task)) return;
+    let cancelled = false;
+    void api
+      .unsnoozeTask(task.id)
+      .then((next) => {
+        if (cancelled) return;
+        setSnoozedUntil(next.snoozedUntil);
+        onSaved();
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [task?.id]);
 
   useEffect(() => {
     if (!task) return;
@@ -513,6 +532,7 @@ function TaskForm({
       </DialogDescription>
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-7 pb-[calc(2rem+env(safe-area-inset-bottom))] pt-2">
       {task ? (
+        <>
         <ExistingTaskBody
           title={title}
           detail={detail}
@@ -571,6 +591,15 @@ function TaskForm({
           panel={panel}
           onPanel={setPanel}
         />
+        <SnoozeControl
+          taskId={task.id}
+          snoozedUntil={snoozedUntil}
+          onChanged={(next) => {
+            setSnoozedUntil(next);
+            onSaved();
+          }}
+        />
+        </>
       ) : (
       <label className={labelClass}>
         Title

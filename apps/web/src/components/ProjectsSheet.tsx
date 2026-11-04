@@ -340,7 +340,7 @@ function ProjectDetail({
   }, [teamId, project.area?.id, project.area?.name]);
 
   async function loadTasks() {
-    const list = await api.tasks({ teamId, projectId: project.id });
+    const list = await api.tasks({ teamId, projectId: project.id, includeSnoozed: true });
     setTasks(list.tasks);
     return list.tasks;
   }

@@ -24,6 +24,7 @@ export function toTask(row: TaskRow, names: { projectName: string | null; areaNa
     area: row.areaId && names.areaName ? { id: row.areaId, name: names.areaName } : null,
     source: readSource(row.source),
     dueAt: iso(row.dueAt),
+    snoozedUntil: iso(row.snoozedUntil),
     outcome: row.outcome,
     createdAt: iso(row.createdAt) ?? new Date(0).toISOString(),
     updatedAt: iso(row.updatedAt) ?? new Date(0).toISOString(),
