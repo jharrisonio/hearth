@@ -134,6 +134,101 @@ export function isProjectFront(action: Action): boolean {
   return action === "do_now" || action === "delegate" || action === "schedule";
 }
 
+/** A task is snoozed only while `snoozedUntil` is strictly in the future. The action does not change. */
+export function isSnoozed(
+  task: { snoozedUntil?: string | Date | null },
+  now: Date = new Date(),
+): boolean {
+  if (task.snoozedUntil == null) return false;
+  const ms = new Date(task.snoozedUntil).getTime();
+  return !Number.isNaN(ms) && ms > now.getTime();
+}
+
+/** The snooze time has passed and nobody has cleared it yet. */
+export function isBackFromSnooze(
+  task: { snoozedUntil?: string | Date | null },
+  now: Date = new Date(),
+): boolean {
+  if (task.snoozedUntil == null) return false;
+  const ms = new Date(task.snoozedUntil).getTime();
+  return !Number.isNaN(ms) && ms <= now.getTime();
+}
+
+export const SNOOZE_TIME_ZONE = "America/Vancouver";
+
+export const snoozePresets = ["later_today", "tomorrow", "three_days", "next_week"] as const;
+export type SnoozePreset = (typeof snoozePresets)[number];
+
+/** Wall-clock presets in America/Vancouver. Later today rolls to the next 18:00 once that hour has passed. */
+export function snoozePreset(preset: SnoozePreset, now: Date = new Date()): Date {
+  const civil = civilInZone(now, SNOOZE_TIME_ZONE);
+  if (preset === "later_today") {
+    const today = zonedDateTime(civil, 18, 0, SNOOZE_TIME_ZONE);
+    if (today.getTime() > now.getTime()) return today;
+    return zonedDateTime(addCivilDays(civil, 1), 18, 0, SNOOZE_TIME_ZONE);
+  }
+  if (preset === "tomorrow") return zonedDateTime(addCivilDays(civil, 1), 8, 0, SNOOZE_TIME_ZONE);
+  if (preset === "three_days") return zonedDateTime(addCivilDays(civil, 3), 8, 0, SNOOZE_TIME_ZONE);
+  const weekday = new Date(Date.UTC(civil.year, civil.month - 1, civil.day)).getUTCDay();
+  const days = (8 - weekday) % 7 || 7;
+  return zonedDateTime(addCivilDays(civil, days), 8, 0, SNOOZE_TIME_ZONE);
+}
+
+/** Read `YYYY-MM-DDTHH:mm` as a Vancouver wall time, not the browser zone. */
+export function snoozeWallTime(value: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value.trim());
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59) return null;
+  return zonedDateTime({ year, month, day }, hour, minute, SNOOZE_TIME_ZONE);
+}
+
+type CivilDate = { year: number; month: number; day: number };
+
+function civilInZone(date: Date, timeZone: string): CivilDate {
+  const parts = zoneParts(date, timeZone);
+  return { year: parts.year, month: parts.month, day: parts.day };
+}
+
+function addCivilDays(civil: CivilDate, days: number): CivilDate {
+  const utc = new Date(Date.UTC(civil.year, civil.month - 1, civil.day + days));
+  return { year: utc.getUTCFullYear(), month: utc.getUTCMonth() + 1, day: utc.getUTCDate() };
+}
+
+function zonedDateTime(civil: CivilDate, hour: number, minute: number, timeZone: string): Date {
+  const utcGuess = Date.UTC(civil.year, civil.month - 1, civil.day, hour, minute, 0);
+  const first = utcGuess - zoneOffsetMs(new Date(utcGuess), timeZone);
+  const second = utcGuess - zoneOffsetMs(new Date(first), timeZone);
+  return new Date(second);
+}
+
+function zoneOffsetMs(date: Date, timeZone: string): number {
+  const parts = zoneParts(date, timeZone);
+  const asUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
+  return asUtc - date.getTime();
+}
+
+function zoneParts(date: Date, timeZone: string) {
+  const formatted = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(date);
+  const read = (type: string) => Number(formatted.find((part) => part.type === type)?.value ?? "0");
+  let hour = read("hour");
+  if (hour === 24) hour = 0;
+  return { year: read("year"), month: read("month"), day: read("day"), hour, minute: read("minute"), second: read("second") };
+}
+
 /**
  * Human morning queue. Open tasks only: done, cancelled, and `later` stay out.
  * Schedule is in when it needs a calendar, or when `needsCheckIn` (`dueAt` strictly past).
@@ -149,10 +244,12 @@ export function inMorningQueue(
     dueAt: string | Date | null;
     createdAt: string | Date;
     owner?: { type: ActorType };
+    snoozedUntil?: string | Date | null;
   },
   now: Date = new Date(),
 ): boolean {
   if (task.status !== "open") return false;
+  if (isSnoozed(task, now)) return false;
   if (task.action === "do_now") return true;
   const dueMs = task.dueAt == null ? null : new Date(task.dueAt).getTime();
   if (task.action === "schedule") return task.needsCalendar || needsCheckIn(task, now);
@@ -182,11 +279,13 @@ export function inBotQueue(
     needsCalendar: boolean;
     dueAt: string | Date | null;
     owner: { type: ActorType; id: string };
+    snoozedUntil?: string | Date | null;
   },
   actorId: string,
   now: Date = new Date(),
 ): boolean {
   if (task.status !== "open") return false;
+  if (isSnoozed(task, now)) return false;
   if (task.owner.type !== "bot" || task.owner.id !== actorId) return false;
   if (task.action === "delegate") return true;
   if (task.action === "schedule") return task.needsCalendar || needsCheckIn(task, now);
@@ -265,6 +364,8 @@ export const taskSchema = z.object({
   source: taskSourceSchema.nullable(),
   links: z.array(attachedLinkSchema),
   dueAt: z.string().nullable(),
+  /** Set while the task is snoozed or still showing as back from snooze. Null when clear. */
+  snoozedUntil: z.string().nullable(),
   outcome: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -376,6 +477,14 @@ export const cancelTaskSchema = z
   })
   .strict();
 export type CancelTaskInput = z.infer<typeof cancelTaskSchema>;
+
+/** `until` is an ISO time with an offset. The server rejects a time that is not in the future. */
+export const snoozeTaskSchema = z
+  .object({
+    until: z.string().datetime({ offset: true }),
+  })
+  .strict();
+export type SnoozeTaskInput = z.infer<typeof snoozeTaskSchema>;
 
 export interface DeletedTask {
   id: string;
@@ -530,6 +639,8 @@ export const httpOperations = {
   updateTask: { method: "PATCH", path: "/tasks/:id" },
   completeTask: { method: "POST", path: "/tasks/:id/complete" },
   cancelTask: { method: "POST", path: "/tasks/:id/cancel" },
+  snoozeTask: { method: "POST", path: "/tasks/:id/snooze" },
+  unsnoozeTask: { method: "POST", path: "/tasks/:id/unsnooze" },
   deleteTask: { method: "DELETE", path: "/tasks/:id" },
   listTasks: { method: "GET", path: "/tasks" },
   listDoImmediately: { method: "GET", path: "/tasks/do-immediately" },
@@ -576,6 +687,10 @@ export const listTasksQuerySchema = z
     projectId: z.string().uuid().optional(),
     areaId: z.string().uuid().optional(),
     mine: z.boolean().optional(),
+    includeSnoozed: z
+      .boolean()
+      .optional()
+      .describe("Include tasks whose snoozedUntil is still in the future. Omitted lists hide them."),
   })
   .strict();
 export type ListTasksQuery = z.infer<typeof listTasksQuerySchema>;
@@ -614,6 +729,18 @@ export const deleteTaskToolSchema = z
   })
   .strict();
 export type DeleteTaskToolInput = z.infer<typeof deleteTaskToolSchema>;
+
+export const snoozeTaskToolSchema = snoozeTaskSchema.extend({
+  id: z.string().uuid(),
+});
+export type SnoozeTaskToolInput = z.infer<typeof snoozeTaskToolSchema>;
+
+export const unsnoozeTaskToolSchema = z
+  .object({
+    id: z.string().uuid(),
+  })
+  .strict();
+export type UnsnoozeTaskToolInput = z.infer<typeof unsnoozeTaskToolSchema>;
 
 /** add_task_link. The same task and url returns the existing row. */
 export const addTaskLinkToolSchema = z

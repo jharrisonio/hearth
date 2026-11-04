@@ -53,6 +53,7 @@ export type TaskQuery = {
   projectId?: string;
   areaId?: string;
   mine?: boolean;
+  includeSnoozed?: boolean;
 };
 
 function queryString(query: TaskQuery) {
@@ -131,6 +132,9 @@ export const api = {
       body: JSON.stringify(outcome === undefined ? {} : { outcome }),
     }),
   reopenTask: (id: string) => request<Task>(`/tasks/${id}/reopen`, { method: "POST", body: "{}" }),
+  snoozeTask: (id: string, until: string) =>
+    request<Task>(`/tasks/${id}/snooze`, { method: "POST", body: JSON.stringify({ until }) }),
+  unsnoozeTask: (id: string) => request<Task>(`/tasks/${id}/unsnooze`, { method: "POST", body: "{}" }),
   deleteTask: (id: string) => request<DeletedTask>(`/tasks/${id}`, { method: "DELETE" }),
   addTaskLink: (taskId: string, body: { title: string; url: string }) =>
     request<AttachedLink>(`/tasks/${taskId}/links`, { method: "POST", body: JSON.stringify(body) }),

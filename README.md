@@ -122,6 +122,8 @@ These are the task operations the MCP server binds to. It does not add task fiel
 | `updateTask` | `PATCH /tasks/:id` (rejects `status`; completing is separate) |
 | `completeTask` | `POST /tasks/:id/complete` `{ "outcome": "…" }` |
 | `cancelTask` | `POST /tasks/:id/cancel` `{ "outcome": "…" }` optional; default `"cancelled"` |
+| `snoozeTask` | `POST /tasks/:id/snooze` `{ "until": "…" }` a future ISO time. The action stays |
+| `unsnoozeTask` | `POST /tasks/:id/unsnooze` |
 | `deleteTask` | `DELETE /tasks/:id` |
 | `listTasks` | `GET /tasks` |
 | `listDoImmediately` | `GET /tasks/do-immediately` |
@@ -147,6 +149,7 @@ A task:
   "source": null,
   "links": [],
   "dueAt": "2026-11-02T00:00:00.000Z",
+  "snoozedUntil": null,
   "outcome": null,
   "createdAt": "2026-11-01T00:00:00.000Z",
   "updatedAt": "2026-11-01T00:00:00.000Z",
@@ -162,6 +165,8 @@ A task:
 `waitingOn` is required when `action` is `delegate` and the owner is not a bot. A bot owner is who acts, so `waitingOn` may be null. On create, omit `dueAt` for a delegated task and the follow-up is set three days ahead. That date is the nudge for a human-owned delegate. Sending `dueAt: null` stores no follow-up; a human-owned task joins the morning queue once it is more than three days old. A bot-owned delegate is that bot's open work immediately. `outcome` is required when the task is completed.
 
 `status` is `open`, `done`, or `cancelled`. Cancel keeps the row: `POST /tasks/:id/cancel` sets `status` to `cancelled`, `cancelledAt`, and `outcome` (the body may omit it, and the stored value is then `cancelled`). `completedAt` stays null. A cancelled task is out of `status=open` and out of the morning queue. `GET /tasks?status=cancelled` is the audit list; a list with no status filter still includes it. Cancelling a done task is **409** `already_done`. Cancelling again, or completing a cancelled task, is **409** `already_cancelled`. `POST /tasks/:id/reopen` puts a done or cancelled task back to `open` and clears `outcome`, `completedAt`, and `cancelledAt`. An open task is returned unchanged. The archive screen uses it when status is set to Open. It is not an MCP tool.
+
+`snoozedUntil` is null, or an ISO time. The task is snoozed only while that time is still in the future, and its action does not change: a snoozed Do now stays `do_now`. `GET /tasks` leaves those out unless `includeSnoozed=true`. Every task in the list still has `snoozedUntil`. `GET /tasks/do-immediately` leaves them out too. Once the time has passed, the task is back in its lane. `POST /tasks/:id/unsnooze` clears the field. A time that is not in the future is **400** `until_not_future`. Snoozing a task that is not open is **409** `not_open`.
 
 `DELETE /tasks/:id` removes the row. That is for a mistake or a duplicate. The response is `{ "id": "…", "deleted": true }`. A second delete is **404**. Deleting the task also deletes its idempotency row, so the same `Idempotency-Key` can create a new task. Another team's token gets **403**.
 

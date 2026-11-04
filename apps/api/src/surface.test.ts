@@ -14,6 +14,7 @@ const { signSession } = await import("./actor.js");
 const { areas, botTokens, bots, idempotencyKeys, memberships, projects, tasks, teams, users } = await import("./schema.js");
 const { mintToken } = await import("./tokens.js");
 const { and, eq } = await import("drizzle-orm");
+const { snoozePreset } = await import("@hearth/shared");
 
 const app = createApp();
 const sessionSecret = process.env.SESSION_SECRET;
@@ -291,6 +292,7 @@ describe("task surface", { concurrency: 1 }, () => {
       "short status summary",
       "numbered instructions",
       "keep them current",
+      "snooze a started do_now",
     ]) {
       assert.match(instructions, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     }
@@ -313,6 +315,8 @@ describe("task surface", { concurrency: 1 }, () => {
       "list_projects",
       "list_tasks",
       "remove_task_link",
+      "snooze_task",
+      "unsnooze_task",
       "update_project",
       "update_task",
     ]);
@@ -973,6 +977,90 @@ describe("task surface", { concurrency: 1 }, () => {
     assert.equal(back.cancelledAt, null);
     const audit = await call(fixture.secret, "GET", `/tasks?teamId=${fixture.team.id}&status=cancelled`);
     assert.equal((audit.json as { tasks: { id: string }[] }).tasks.some((row) => row.id === id), false);
+  });
+
+  test("snooze hides a do_now task without changing its action, and wake brings it back", async () => {
+    const fixture = await seed();
+    const other = await seed();
+    const created = await postTask(fixture.secret, {
+      teamId: fixture.team.id,
+      title: "File the notice",
+      action: "do_now",
+      important: true,
+      urgent: true,
+    });
+    assert.equal(created.status, 201);
+    const id = taskBody(created.json).id;
+    assert.equal(taskBody(created.json).snoozedUntil, null);
+
+    const past = await call(fixture.secret, "POST", `/tasks/${id}/snooze`, {
+      until: new Date(Date.now() - 60_000).toISOString(),
+    });
+    assert.equal(past.status, 400);
+    assert.equal(errorBody(past.json).code, "until_not_future");
+
+    const denied = await call(other.secret, "POST", `/tasks/${id}/snooze`, {
+      until: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    });
+    assert.equal(denied.status, 403);
+
+    const until = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+    const snoozed = await call(fixture.secret, "POST", `/tasks/${id}/snooze`, { until });
+    assert.equal(snoozed.status, 200);
+    const snoozedTask = taskBody(snoozed.json);
+    assert.equal(snoozedTask.action, "do_now");
+    assert.equal(snoozedTask.snoozedUntil, until);
+
+    const hidden = await call(fixture.secret, "GET", `/tasks?teamId=${fixture.team.id}&status=open`);
+    assert.equal((hidden.json as { tasks: { id: string }[] }).tasks.some((row) => row.id === id), false);
+    const human = cookieFor(fixture.user.id);
+    const queue = await call(null, "GET", `/tasks/do-immediately?teamId=${fixture.team.id}`, undefined, undefined, human);
+    assert.equal((queue.json as { tasks: { id: string }[] }).tasks.some((row) => row.id === id), false);
+    const included = await call(
+      fixture.secret,
+      "GET",
+      `/tasks?teamId=${fixture.team.id}&status=open&includeSnoozed=true`,
+    );
+    assert.equal((included.json as { tasks: { id: string; snoozedUntil: string | null }[] }).tasks.some((row) => row.id === id && row.snoozedUntil === until), true);
+
+    const badFlag = await call(fixture.secret, "GET", `/tasks?includeSnoozed=maybe`);
+    assert.equal(badFlag.status, 400);
+
+    await db.update(tasks).set({ snoozedUntil: new Date(Date.now() - 60_000) }).where(eq(tasks.id, id));
+    const awake = await call(fixture.secret, "GET", `/tasks?teamId=${fixture.team.id}&status=open`);
+    const woke = (awake.json as { tasks: { id: string; action: string; snoozedUntil: string | null }[] }).tasks.find(
+      (row) => row.id === id,
+    );
+    assert.ok(woke);
+    assert.equal(woke.action, "do_now");
+    assert.equal(typeof woke.snoozedUntil, "string");
+    assert.ok(new Date(woke.snoozedUntil ?? "").getTime() <= Date.now());
+    const queueAgain = await call(null, "GET", `/tasks/do-immediately?teamId=${fixture.team.id}`, undefined, undefined, human);
+    assert.equal((queueAgain.json as { tasks: { id: string }[] }).tasks.some((row) => row.id === id), true);
+
+    const cleared = await call(fixture.secret, "POST", `/tasks/${id}/unsnooze`, {});
+    assert.equal(cleared.status, 200);
+    assert.equal(taskBody(cleared.json).snoozedUntil, null);
+    assert.equal(taskBody(cleared.json).action, "do_now");
+    const again = await call(fixture.secret, "POST", `/tasks/${id}/unsnooze`, {});
+    assert.equal(again.status, 200);
+    assert.equal(taskBody(again.json).snoozedUntil, null);
+
+    const done = await call(fixture.secret, "POST", `/tasks/${id}/complete`, { outcome: "Filed" });
+    assert.equal(done.status, 200);
+    const snoozeDone = await call(fixture.secret, "POST", `/tasks/${id}/snooze`, {
+      until: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    });
+    assert.equal(snoozeDone.status, 409);
+    assert.equal(errorBody(snoozeDone.json).code, "not_open");
+
+    const noon = new Date("2026-01-15T20:00:00.000Z");
+    assert.equal(snoozePreset("later_today", noon).toISOString(), "2026-01-16T02:00:00.000Z");
+    assert.equal(snoozePreset("tomorrow", noon).toISOString(), "2026-01-16T16:00:00.000Z");
+    assert.equal(snoozePreset("three_days", noon).toISOString(), "2026-01-18T16:00:00.000Z");
+    assert.equal(snoozePreset("next_week", noon).toISOString(), "2026-01-19T16:00:00.000Z");
+    const evening = new Date("2026-01-16T03:00:00.000Z");
+    assert.equal(snoozePreset("later_today", evening).toISOString(), "2026-01-17T02:00:00.000Z");
   });
 
   test("bot owners may omit waitingOn, and do-immediately follows the caller", async () => {
@@ -1693,8 +1781,12 @@ function taskBody(json: unknown) {
   };
   assert.equal(typeof task.id, "string");
   assert.ok("source" in task, "task includes source");
+  assert.ok("snoozedUntil" in task, "task includes snoozedUntil");
   assert.ok(Array.isArray((json as { links?: unknown }).links), "task includes links");
-  return task as typeof task & { links: { id: string; title: string; url: string }[] };
+  return task as typeof task & {
+    links: { id: string; title: string; url: string }[];
+    snoozedUntil: string | null;
+  };
 }
 
 function linkBody(json: unknown) {

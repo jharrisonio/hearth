@@ -230,6 +230,8 @@ export const tasks = pgTable(
     /** Email or page this task came from. Null when the task has no link. */
     source: jsonb("source").$type<TaskSource | null>(),
     dueAt: timestamp("due_at", { withTimezone: true }),
+    /** While this is in the future the task is snoozed and stays on its action. */
+    snoozedUntil: timestamp("snoozed_until", { withTimezone: true }),
     outcome: text("outcome"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
