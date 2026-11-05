@@ -295,6 +295,7 @@ describe("task surface", { concurrency: 1 }, () => {
       "snooze a started do_now",
       "Reference a task by its key",
       "https://hearth.jharrison.io/t/",
+      "call move_task",
     ]) {
       assert.match(instructions, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     }
@@ -316,6 +317,7 @@ describe("task surface", { concurrency: 1 }, () => {
       "list_do_immediately",
       "list_projects",
       "list_tasks",
+      "move_task",
       "remove_task_link",
       "snooze_task",
       "unsnooze_task",
@@ -1819,6 +1821,131 @@ describe("task surface", { concurrency: 1 }, () => {
     assert.equal(still.status, 200);
     assert.equal(taskBody(still.json).title, "Call the plumber now");
   });
+
+  test("moving a task renumbers it, clears project and area, and retires the old key", async () => {
+    const fixture = await seed();
+    const stranger = await seed();
+    const [personal] = await db.insert(teams).values({ name: "James's list", kind: "personal" }).returning();
+    if (!personal) throw new Error("personal list seed failed");
+    await db.insert(memberships).values({ teamId: personal.id, userId: fixture.user.id, role: "owner" });
+    const cookie = cookieFor(fixture.user.id);
+
+    const project = await call(null, "POST", `/teams/${fixture.team.id}/projects`, { name: "Boiler service" }, undefined, cookie);
+    const area = await call(null, "POST", `/teams/${fixture.team.id}/areas`, { name: "House" }, undefined, cookie);
+    assert.equal(project.status, 201);
+    assert.equal(area.status, 201);
+    const projectId = (project.json as { id: string }).id;
+    const areaId = (area.json as { id: string }).id;
+    const registered = await call(
+      null,
+      "POST",
+      `/teams/${fixture.team.id}/bots`,
+      { agentId: "grok-fin", name: "Fin" },
+      undefined,
+      cookie,
+    );
+    assert.equal(registered.status, 201);
+    const botId = (registered.json as { id: string }).id;
+
+    const created = await postTask(fixture.secret, {
+      teamId: fixture.team.id,
+      title: "Book the boiler service",
+      detail: "Ask for a morning slot",
+      action: "delegate",
+      waitingOn: "a plumber to ring back",
+      projectId,
+      areaId,
+      owner: { type: "bot", id: botId },
+    });
+    assert.equal(created.status, 201);
+    const task = taskBody(created.json);
+    const linked = await call(fixture.secret, "POST", `/tasks/${task.key}/links`, {
+      title: "Quote",
+      url: "https://example.com/quote",
+    });
+    assert.equal(linked.status, 201);
+
+    const same = await call(null, "POST", `/tasks/${task.key.toLowerCase()}/move`, { teamId: fixture.team.id }, undefined, cookie);
+    assert.equal(same.status, 200);
+    assert.equal(taskBody(same.json).id, task.id);
+    assert.equal(taskBody(same.json).key, task.key);
+    assert.equal(taskBody(same.json).number, task.number);
+    assert.equal(taskBody(same.json).project?.id, projectId);
+
+    const deniedTeam = await call(
+      null,
+      "POST",
+      `/tasks/${task.key}/move`,
+      { teamId: stranger.team.id },
+      undefined,
+      cookie,
+    );
+    assert.equal(deniedTeam.status, 403);
+    assert.equal(errorBody(deniedTeam.json).code, "forbidden");
+    const deniedSource = await call(
+      null,
+      "POST",
+      `/tasks/${task.key}/move`,
+      { teamId: personal.id },
+      undefined,
+      cookieFor(stranger.user.id),
+    );
+    assert.equal(deniedSource.status, 403);
+    const deniedBot = await call(fixture.secret, "POST", `/tasks/${task.key}/move`, { teamId: personal.id });
+    assert.equal(deniedBot.status, 403);
+
+    const moved = await call(null, "POST", `/tasks/${task.key.toLowerCase()}/move`, { teamId: personal.id }, undefined, cookie);
+    assert.equal(moved.status, 200);
+    const next = taskBody(moved.json);
+    assert.equal(next.id, task.id);
+    assert.equal(next.teamId, personal.id);
+    assert.equal(next.title, task.title);
+    assert.equal(next.createdAt, task.createdAt);
+    assert.notEqual(next.key, task.key);
+    assert.match(next.key, new RegExp(`^${personal.key}-\\d+$`));
+    assert.equal(next.project, null);
+    assert.equal(next.area, null);
+    assert.equal(next.waitingOn, "a plumber to ring back");
+    assert.deepEqual(next.owner, { type: "user", id: fixture.user.id });
+    assert.equal(next.links.length, 1);
+    assert.equal(next.links[0]?.url, "https://example.com/quote");
+
+    const stale = await call(null, "GET", `/tasks/${task.key}`, undefined, undefined, cookie);
+    assert.equal(stale.status, 404);
+    const byUuid = await call(null, "GET", `/tasks/${task.id}`, undefined, undefined, cookie);
+    assert.equal(byUuid.status, 200);
+    assert.equal(taskBody(byUuid.json).key, next.key);
+
+    const sourceCounter = await pool.query<{ next_task_number: number }>(
+      "select next_task_number from teams where id = $1",
+      [fixture.team.id],
+    );
+    assert.equal(sourceCounter.rows[0]?.next_task_number, task.number);
+    const after = await postTask(fixture.secret, { teamId: fixture.team.id, title: "Another boiler call" });
+    assert.equal(after.status, 201);
+    assert.notEqual(taskBody(after.json).number, task.number);
+    assert.ok(taskBody(after.json).number > task.number);
+    const reused = await call(fixture.secret, "GET", `/tasks/${task.key}`);
+    assert.equal(reused.status, 404);
+
+    const noop = toolJson(
+      await rpc(fixture.secret, "tools/call", {
+        name: "move_task",
+        arguments: { id: taskBody(after.json).key.toLowerCase(), teamId: fixture.team.id },
+      }),
+    ) as { key: string };
+    assert.equal(noop.key, taskBody(after.json).key);
+    const mcpDenied = rpcResult(
+      (
+        await rpc(fixture.secret, "tools/call", {
+          name: "move_task",
+          arguments: { id: next.key, teamId: fixture.team.id },
+        })
+      ).json,
+    ) as { isError?: boolean; content?: { text?: string }[] };
+    assert.equal(mcpDenied.isError, true);
+    assert.match(mcpDenied.content?.[0]?.text ?? "", /^403 /);
+  });
 });
 
 async function seed() {
@@ -1912,8 +2039,11 @@ function taskBody(json: unknown) {
     id: string;
     key: string;
     number: number;
+    teamId: string;
     owner: { type: string; id: string };
     title: string;
+    createdAt: string;
+    waitingOn: string | null;
     action: string;
     source: unknown;
     project: { id: string; name: string } | null;

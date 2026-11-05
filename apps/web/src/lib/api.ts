@@ -137,6 +137,8 @@ export const api = {
     request<Task>(taskPath(id, "/snooze"), { method: "POST", body: JSON.stringify({ until }) }),
   unsnoozeTask: (id: string) => request<Task>(taskPath(id, "/unsnooze"), { method: "POST", body: "{}" }),
   deleteTask: (id: string) => request<DeletedTask>(taskPath(id), { method: "DELETE" }),
+  moveTask: (id: string, teamId: string) =>
+    request<Task>(taskPath(id, "/move"), { method: "POST", body: JSON.stringify({ teamId }) }),
   addTaskLink: (taskId: string, body: { title: string; url: string }) =>
     request<AttachedLink>(taskPath(taskId, "/links"), { method: "POST", body: JSON.stringify(body) }),
   updateTaskLink: (taskId: string, linkId: string, body: { title?: string; url?: string }) =>
