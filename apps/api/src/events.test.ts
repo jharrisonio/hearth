@@ -375,6 +375,45 @@ describe("task events", { concurrency: 1 }, () => {
     const anon = await rpc(null, "resources/read", { uri: "hearth://task-events" });
     assert.equal(anon.status, 401);
   });
+
+  test("a move notifies the list it left and the list it joined", async () => {
+    const home = await seed();
+    const [personal] = await db.insert(teams).values({ name: "James's list", kind: "personal" }).returning();
+    if (!personal) throw new Error("personal list seed failed");
+    await db.insert(memberships).values({ teamId: personal.id, userId: home.user.id, role: "owner" });
+    const cookie = cookieFor(home.user.id);
+    const created = await postTask(home.secret, { teamId: home.team.id, title: "Take the bins out" });
+    assert.equal(created.status, 201);
+    const task = taskBody(created.json);
+    const source = await openEvents(null, home.team.id, cookie);
+    const destination = await openEvents(null, personal.id, cookie);
+    try {
+      await source.readUntil((text) => text.includes("event: ready"));
+      await destination.readUntil((text) => text.includes("event: ready"));
+      const same = await call(null, "POST", `/tasks/${task.id}/move`, { teamId: home.team.id }, undefined, cookie);
+      assert.equal(same.status, 200);
+      await idle(150);
+      assert.equal(taskEvents(source.text()).some((event) => event.type === "moved"), false);
+
+      const moved = await call(null, "POST", `/tasks/${task.key}/move`, { teamId: personal.id }, undefined, cookie);
+      assert.equal(moved.status, 200);
+      const next = taskBody(moved.json);
+      await source.readUntil((text) => taskEvents(text).some((event) => event.type === "moved" && event.taskId === task.id));
+      await destination.readUntil((text) =>
+        taskEvents(text).some((event) => event.type === "moved" && event.taskId === task.id),
+      );
+      const left = taskEvents(source.text()).find((event) => event.type === "moved");
+      const joined = taskEvents(destination.text()).find((event) => event.type === "moved");
+      assert.equal(left?.teamId, home.team.id);
+      assert.equal(left?.task?.teamId, personal.id);
+      assert.equal(left?.task?.key, next.key);
+      assert.equal(joined?.teamId, personal.id);
+      assert.equal(joined?.task?.teamId, personal.id);
+    } finally {
+      await source.stop();
+      await destination.stop();
+    }
+  });
 });
 
 async function seed() {
@@ -542,6 +581,8 @@ type TaskEventBody = {
   at: string;
   task: {
     id: string;
+    key: string;
+    teamId: string;
     title: string;
     status: string;
     updatedAt: string;
@@ -599,14 +640,16 @@ function taskEvents(text: string): TaskEventBody[] {
       event.event === "updated" ||
       event.event === "completed" ||
       event.event === "cancelled" ||
-      event.event === "deleted",
+      event.event === "deleted" ||
+      event.event === "moved",
     )
     .map((event) => JSON.parse(event.data ?? "") as TaskEventBody);
 }
 
 function taskBody(json: unknown) {
-  const task = json as { id: string; updatedAt: string; title: string };
+  const task = json as { id: string; key: string; updatedAt: string; title: string };
   assert.equal(typeof task.id, "string");
+  assert.match(task.key, /^[A-Z]+-\d+$/);
   return task;
 }
 

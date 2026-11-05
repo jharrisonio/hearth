@@ -7,6 +7,7 @@ import {
   followUpFrom,
   resolveNeedsCalendar,
   scheduleRequiresDueAt,
+  moveTaskSchema,
   snoozeTaskSchema,
   suggestAction,
   taskStatuses,
@@ -393,6 +394,53 @@ taskRoutes.post("/:id/unsnooze", async (c) => {
   return c.json(task);
 });
 
+taskRoutes.post("/:id/move", async (c) => {
+  const actor = c.get("actor");
+  const id = await resolveTaskId(actor, c.req.param("id"));
+  const body = parseBody(moveTaskSchema, await readJson(c));
+  const existing = await loadTask(id);
+  await requireTeam(actor, existing.teamId);
+  if (body.teamId === existing.teamId) {
+    const task = await loadTaskView(id);
+    if (!task) throw new HttpError(404, "not_found", "Task not found.");
+    return c.json(task);
+  }
+  await requireTeam(actor, body.teamId);
+  const sourceTeamId = existing.teamId;
+  const currentOwner = { type: existing.ownerType, id: existing.ownerId };
+  const owner = (await ownerStillValid(body.teamId, currentOwner)) ? currentOwner : actorRef(actor);
+  const now = new Date();
+  const moved = await db.transaction(async (tx) => {
+    const [counter] = await tx
+      .update(teams)
+      .set({ nextTaskNumber: sql`${teams.nextTaskNumber} + 1` })
+      .where(eq(teams.id, body.teamId))
+      .returning({ nextTaskNumber: teams.nextTaskNumber });
+    if (!counter) throw new Error("Failed to number task");
+    const [row] = await tx
+      .update(tasks)
+      .set({
+        teamId: body.teamId,
+        number: counter.nextTaskNumber,
+        projectId: null,
+        areaId: null,
+        sortOrder: null,
+        ownerType: owner.type,
+        ownerId: owner.id,
+        updatedAt: now,
+      })
+      .where(eq(tasks.id, id))
+      .returning();
+    if (!row) throw new Error("Failed to move task");
+    return row;
+  });
+  const task = await loadTaskView(moved.id);
+  if (!task) throw new HttpError(404, "not_found", "Task not found.");
+  await publishTaskEvent("moved", task, task.updatedAt, sourceTeamId);
+  await publishTaskEvent("moved", task);
+  return c.json(task);
+});
+
 taskRoutes.delete("/:id", async (c) => {
   const id = await resolveTaskId(c.get("actor"), c.req.param("id"));
   const existing = await loadTask(id);
@@ -405,6 +453,16 @@ taskRoutes.delete("/:id", async (c) => {
   const body: DeletedTask = { id: snapshot.id, deleted: true };
   return c.json(body);
 });
+
+async function ownerStillValid(teamId: string, owner: { type: "user" | "bot"; id: string }) {
+  try {
+    await assertOwnerOnTeam(teamId, owner);
+    return true;
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 400) return false;
+    throw err;
+  }
+}
 
 async function loadTask(id: string) {
   const [row] = await db.select().from(tasks).where(eq(tasks.id, id)).limit(1);

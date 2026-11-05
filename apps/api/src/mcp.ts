@@ -14,6 +14,8 @@ import {
   snoozeTaskSchema,
   snoozeTaskToolSchema,
   unsnoozeTaskToolSchema,
+  moveTaskSchema,
+  moveTaskToolSchema,
   removeTaskLinkToolSchema,
   doImmediatelyQuerySchema,
   httpOperations,
@@ -49,7 +51,7 @@ const SERVER_VERSION = "0.1.0";
  */
 const MCP_INSTRUCTIONS = [
   "Standing rules for every connected Hearth bot. Follow them without a pasted brief. hearth_help returns this same text.",
-  "Teams. This token only sees lists it was granted. Personal and household never mix: do not copy or mirror a task from one list onto the other. Spare and other work stay out of Hearth unless James says to put that item here.",
+  "Teams. This token only sees lists it was granted. Personal and household never mix: do not copy or mirror a task from one list onto the other. Spare and other work stay out of Hearth unless James says to put that item here. To move a task between personal and household, call move_task rather than recreating it and cancelling the original.",
   "Actions. Set action to do_now, delegate, schedule, or later. Present those to people as Do now, Delegate, Schedule, and Later. Do not present Important or Urgent as labels. Those flags only sort the queue. Omitting action stores a suggestion from the flags; set the action yourself. do_now is a human owner doing it. delegate is a bot or an outsider. A bot owner has waitingOn null, because the bot is who acts. An outsider needs waitingOn, the person or office you are waiting on. Omit owner and this token becomes the owner. Hand work to another bot with a registered bot id. schedule needs dueAt, the event time, and calendarEventId. Hearth does not create the Google event. Create it with your calendar connector, then PATCH calendarEventId and dueAt. Until calendarEventId is set, needsCalendar stays true. An open schedule with dueAt in the past is a check-in: complete_task, cancel_task, or update dueAt and calendarEventId. later is a future or dependent step. It stays out of both morning queues until the action changes. Bots may snooze a started do_now task instead of scheduling it.",
   "Projects and areas. A project is a multi-step outcome. An area is a life domain such as House or Finance. Link them with projectId and areaId. A task title is one next action, not the whole outcome. On a project, do_now, delegate, and schedule are active next actions and several may run at once. Future steps are separate tasks with action later. Project notes hold the plan, not the step list.",
   "Queues. list_do_immediately follows the caller and matches the implementation. A human morning queue is inMorningQueue: open do_now; open schedule that still needs a calendar or is a check-in (dueAt strictly in the past); and delegate tasks whose owner is not a bot when dueAt is due or overdue, or when dueAt is empty and the task is more than three days old. Bot-owned delegates stay out of that queue. Bot-owned schedule tasks stay in, so a person can attach the calendar or check in. A bot morning queue is inBotQueue: open delegate tasks this token owns, at any dueAt, plus schedule tasks this token owns that still need a calendar or are a check-in. do_now stays on the human queue. Another bot's delegate work is list_tasks with action=delegate, status=open, and owner=bot:<id>. That bot's check-ins use action=schedule, status=open, owner=bot:<id>, and dueBefore now. List the ones that still need a calendar with needsCalendar=true instead of dueBefore.",
@@ -128,7 +130,8 @@ async function taskEventsText(app: FetchApp, authorization: string) {
     "Send the same Authorization: Bearer token and Accept: text/event-stream.",
     urls,
     "Through the web origin, prefix the path with /api.",
-    "The event name is created, updated, completed, cancelled, or deleted. data is JSON with type, teamId, taskId, at, and task (the same task object as GET /tasks, including key, source, and links).",
+    "The event name is created, updated, completed, cancelled, deleted, or moved. data is JSON with type, teamId, taskId, at, and task (the same task object as GET /tasks, including key, source, and links).",
+    "On moved, the event is sent to the list the task left and the list it joined. task is the row after the move, with its new key. On the list it left, task.teamId is the destination, so drop taskId there.",
     "On deleted, task is that row on the process that removed it, and null on another process because the row is already gone. taskId is enough to drop it.",
     "event ready means the subscription is on. Lines starting with ':' are keepalives. event reconnect means open the URL again and refetch with list_tasks.",
     "There is no backlog. An idempotent replay does not emit another created event.",
@@ -285,6 +288,23 @@ function registerTaskTools(server: McpServer, app: FetchApp, authorization: stri
         headers: { "content-type": "application/json" },
         body: "{}",
       })),
+  );
+
+  server.registerTool(
+    "move_task",
+    {
+      description:
+        "Move a task to another list (POST /tasks/:id/move). id may be a UUID or a key like J-142. teamId is the destination. The caller must belong to both lists. The same team returns the task unchanged. A cross-team move keeps the row and assigns a new key, such as H-40. The old key stops resolving and its number is not reused. Project and area are cleared. A bot owner that is not registered on the destination becomes the caller. waitingOn is left as it is. Use this to move a task between personal and household rather than recreating it and cancelling the original.",
+      inputSchema: moveTaskToolSchema,
+    },
+    async ({ id, teamId }) => {
+      const parsed = moveTaskSchema.parse({ teamId });
+      return asTool(await callApi(app, authorization, `/tasks/${encodeURIComponent(id)}/move`, {
+        method: httpOperations.moveTask.method,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(parsed),
+      }));
+    },
   );
 
   server.registerTool(

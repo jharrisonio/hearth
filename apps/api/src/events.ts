@@ -68,10 +68,10 @@ export async function closeTaskEvents() {
   await current.end().catch(() => undefined);
 }
 
-export async function publishTaskEvent(type: TaskEventType, task: Task, at = task.updatedAt) {
+export async function publishTaskEvent(type: TaskEventType, task: Task, at = task.updatedAt, teamId = task.teamId) {
   deliverLocal({
     type,
-    teamId: task.teamId,
+    teamId,
     taskId: task.id,
     at,
     task,
@@ -79,7 +79,7 @@ export async function publishTaskEvent(type: TaskEventType, task: Task, at = tas
   const payload = JSON.stringify({
     origin: taskEventOrigin,
     type,
-    teamId: task.teamId,
+    teamId,
     taskId: task.id,
     at,
   });
@@ -108,6 +108,18 @@ export async function handleRemoteNotification(payload: string) {
       taskId: note.taskId,
       at: note.at,
       task: task && task.teamId === note.teamId ? task : null,
+    });
+    return;
+  }
+  if (note.type === "moved") {
+    const task = await loadTaskView(note.taskId);
+    if (!task) return;
+    deliverLocal({
+      type: "moved",
+      teamId: note.teamId,
+      taskId: note.taskId,
+      at: note.at,
+      task,
     });
     return;
   }

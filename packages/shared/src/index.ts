@@ -381,8 +381,8 @@ export const taskSchema = z.object({
 });
 export type Task = z.infer<typeof taskSchema>;
 
-/** Names emitted on GET /teams/:id/events. */
-export const taskEventTypes = ["created", "updated", "completed", "cancelled", "deleted"] as const;
+/** Names emitted on GET /teams/:id/events. `moved` is sent to both lists. */
+export const taskEventTypes = ["created", "updated", "completed", "cancelled", "deleted", "moved"] as const;
 export type TaskEventType = (typeof taskEventTypes)[number];
 
 /**
@@ -489,6 +489,14 @@ export const snoozeTaskSchema = z
   })
   .strict();
 export type SnoozeTaskInput = z.infer<typeof snoozeTaskSchema>;
+
+/** Destination list for POST /tasks/:id/move. */
+export const moveTaskSchema = z
+  .object({
+    teamId: z.string().uuid(),
+  })
+  .strict();
+export type MoveTaskInput = z.infer<typeof moveTaskSchema>;
 
 export interface DeletedTask {
   id: string;
@@ -646,6 +654,7 @@ export const httpOperations = {
   snoozeTask: { method: "POST", path: "/tasks/:id/snooze" },
   unsnoozeTask: { method: "POST", path: "/tasks/:id/unsnooze" },
   deleteTask: { method: "DELETE", path: "/tasks/:id" },
+  moveTask: { method: "POST", path: "/tasks/:id/move" },
   listTasks: { method: "GET", path: "/tasks" },
   listDoImmediately: { method: "GET", path: "/tasks/do-immediately" },
   listTaskLinks: { method: "GET", path: "/tasks/:id/links" },
@@ -757,6 +766,14 @@ export const unsnoozeTaskToolSchema = z
   })
   .strict();
 export type UnsnoozeTaskToolInput = z.infer<typeof unsnoozeTaskToolSchema>;
+
+export const moveTaskToolSchema = z
+  .object({
+    id: taskRefSchema,
+    teamId: z.string().uuid(),
+  })
+  .strict();
+export type MoveTaskToolInput = z.infer<typeof moveTaskToolSchema>;
 
 /** add_task_link. The same task and url returns the existing row. */
 export const addTaskLinkToolSchema = z

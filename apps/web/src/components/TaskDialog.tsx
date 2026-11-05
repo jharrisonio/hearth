@@ -14,6 +14,7 @@ import {
   type SourceType,
   type Task,
   type TaskLink,
+  type TeamSummary,
   type TaskSource,
   type TaskStatus,
   type UpdateTaskInput,
@@ -41,6 +42,8 @@ export function TaskDialog({
   onOpenProject,
   onClose,
   onSaved,
+  teams,
+  onMoved,
 }: {
   open: boolean;
   layer?: "base" | "front";
@@ -51,6 +54,8 @@ export function TaskDialog({
   onOpenProject: (projectId: string) => void;
   onClose: () => void;
   onSaved: () => void;
+  teams: TeamSummary[];
+  onMoved: (task: Task) => void;
 }) {
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
@@ -67,7 +72,7 @@ export function TaskDialog({
       >
         {open ? (
           <TaskForm
-            key={task?.id ?? "new"}
+            key={`${task?.id ?? "new"}:${task?.teamId ?? teamId}`}
             teamId={task?.teamId ?? teamId}
             task={task}
             defaultOwnerId={defaultOwnerId}
@@ -75,6 +80,8 @@ export function TaskDialog({
             onOpenProject={onOpenProject}
             onClose={onClose}
             onSaved={onSaved}
+            teams={teams}
+            onMoved={onMoved}
           />
         ) : null}
       </DialogContent>
@@ -90,6 +97,8 @@ function TaskForm({
   onOpenProject,
   onClose,
   onSaved,
+  teams,
+  onMoved,
 }: {
   teamId: string;
   task: Task | null;
@@ -98,6 +107,8 @@ function TaskForm({
   onOpenProject: (projectId: string) => void;
   onClose: () => void;
   onSaved: () => void;
+  teams: TeamSummary[];
+  onMoved: (task: Task) => void;
 }) {
   const seeded = task ? { important: task.important, urgent: task.urgent } : axesFor(defaultAction);
   const [members, setMembers] = useState<Member[]>([]);
@@ -133,6 +144,10 @@ function TaskForm({
   const [panel, setPanel] = useState<PropertyPanel | null>(null);
   const [snoozedUntil, setSnoozedUntil] = useState<string | null>(task?.snoozedUntil ?? null);
   const [copied, setCopied] = useState(false);
+  const [moveTarget, setMoveTarget] = useState<string | null>(null);
+  const [moving, setMoving] = useState(false);
+  const otherLists = teams.filter((item) => item.id !== (task?.teamId ?? teamId));
+  const moveName = otherLists.find((item) => item.id === moveTarget)?.name ?? "that list";
   const parsedOwner = parseOwnerKey(owner);
   const waitingRequired = delegateRequiresWaitingOn(action, parsedOwner);
   const ownerChoices = new Set([
@@ -505,6 +520,21 @@ function TaskForm({
     }
   }
 
+  async function moveTask() {
+    if (!task || !moveTarget || moving) return;
+    setMoving(true);
+    setError(null);
+    try {
+      const saved = await commitRef.current();
+      if (!saved) return;
+      const next = await api.moveTask(task.key, moveTarget);
+      onMoved(next);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not move the task.");
+      setMoving(false);
+    }
+  }
+
   function copyTaskLink() {
     if (!task?.key) return;
     const url = `https://hearth.jharrison.io/t/${task.key}`;
@@ -749,6 +779,38 @@ function TaskForm({
         }}
         onSaved={onSaved}
       />
+      {task && otherLists.length > 0 ? (
+        <section className="mt-16 border-t border-[#1c1c1c] pt-8">
+          <h2 className="text-[10px] font-normal uppercase tracking-[0.32em] text-[#a8a8a8]">Move to…</h2>
+          {moveTarget ? (
+            <div className="mt-6">
+              <p className="text-[15px] font-light text-[#d6d6d6]">Move this task to {moveName}? The key will change.</p>
+              <div className="mt-6 flex items-center gap-7">
+                <Button type="button" variant="ghost" onClick={() => setMoveTarget(null)} disabled={moving}>
+                  Stay
+                </Button>
+                <Button type="button" variant="solid" onClick={() => void moveTask()} disabled={moving}>
+                  {moving ? "Moving…" : "Move"}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <ul className="mt-4">
+              {otherLists.map((item) => (
+                <li key={item.id}>
+                  <button
+                    type="button"
+                    className="py-2.5 text-left text-[15px] font-light text-[#d6d6d6] hover:text-white"
+                    onClick={() => setMoveTarget(item.id)}
+                  >
+                    {item.name}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      ) : null}
       {task ? (
         <section className="mt-16 border-t border-[#1c1c1c] pt-8">
           <h2 className="text-[10px] font-normal uppercase tracking-[0.32em] text-[#a8a8a8]">Danger zone</h2>

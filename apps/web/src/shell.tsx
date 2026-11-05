@@ -116,7 +116,7 @@ export function Shell() {
         setMissingKey(null);
         chooseList(task.teamId);
         setEditing((currentEditor) => {
-          if (currentEditor?.task?.id === task.id) return currentEditor;
+          if (currentEditor?.task?.id === task.id && currentEditor.task.key === task.key) return currentEditor;
           return { teamId: task.teamId, task, defaultAction: task.action };
         });
         if (task.key !== key) navigate(`/t/${task.key}`, { replace: true });
@@ -170,6 +170,14 @@ export function Shell() {
             if (routeKey) navigate("/tasks", { replace: true });
           }}
           onSaved={() => setTaskRevision((revision) => revision + 1)}
+          teams={teams}
+          onMoved={(task) => {
+            setMissingKey(null);
+            chooseList(task.teamId);
+            setEditing({ teamId: task.teamId, task, defaultAction: task.action });
+            navigate(`/t/${task.key}`, { replace: true });
+            setTaskRevision((revision) => revision + 1);
+          }}
         />
       ) : null}
       {missingKey ? (
