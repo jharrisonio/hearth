@@ -18,7 +18,7 @@ const { signSession } = await import("./actor.js");
 const { isAllowedRedirect, parseAgentRoster, pkceMatches, pkceS256, redirectMatches } = await import("./oauth.js");
 const { bots, memberships, tasks, teams, users } = await import("./schema.js");
 const { mintToken } = await import("./tokens.js");
-const { eq } = await import("drizzle-orm");
+const { and, eq } = await import("drizzle-orm");
 
 const app = createApp();
 const issuer = process.env.OAUTH_ISSUER;
@@ -132,14 +132,14 @@ describe("mcp oauth", { concurrency: 1 }, () => {
     assert.equal(previewBody.redirectHost, "127.0.0.1:8787");
     assert.deepEqual(previewBody.agents.map((agent) => agent.agentId), ["grok-fin"]);
 
-    const stranger = await seedUser("Naomi");
-    await db.insert(memberships).values({ teamId: fixture.home.id, userId: stranger.id, role: "member" });
-    const deniedMember = await app.request("/oauth/consent", {
+    const outsider = await seedUser("Naomi");
+    const deniedOutsider = await app.request("/oauth/consent", {
       method: "POST",
-      headers: { "content-type": "application/json", cookie: cookieFor(stranger.id) },
+      headers: { "content-type": "application/json", cookie: cookieFor(outsider.id) },
       body: JSON.stringify({ request: requestId, teamIds: [fixture.home.id], bots: previewBody.agents }),
     });
-    assert.equal(deniedMember.status, 403);
+    assert.equal(deniedOutsider.status, 403);
+    assert.equal((await deniedOutsider.json()).error.code, "forbidden");
 
     const approved = await app.request("/oauth/consent", {
       method: "POST",
@@ -302,6 +302,114 @@ describe("mcp oauth", { concurrency: 1 }, () => {
     assert.equal(((await rest.json()) as { grantRevoked: boolean }).grantRevoked, true);
     const gone = await rpc(installed.access, "tools/call", { name: "list_tasks", arguments: {} });
     assert.equal(gone.status, 401);
+  });
+
+  test("a member authorises their list, and the token reads and updates only that list", async () => {
+    const fixture = await seed();
+    const work = await seedUser("Work");
+    await db.insert(memberships).values({ teamId: fixture.home.id, userId: work.id, role: "member" });
+    const created = await app.request("/tasks", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: cookieFor(fixture.user.id) },
+      body: JSON.stringify({ teamId: fixture.home.id, title: "Work Life note", action: "do_now" }),
+    });
+    assert.equal(created.status, 201);
+    const task = (await created.json()) as { id: string; title: string };
+
+    const redirectUri = "https://www.cursor.com/agents/mcp/oauth/callback";
+    const registered = await register([redirectUri]);
+    const { verifier, challenge } = pkce();
+    const start = await app.request(
+      `/authorize?response_type=code&client_id=${registered.client_id}&redirect_uri=${encodeURIComponent(redirectUri)}&code_challenge=${challenge}&code_challenge_method=S256&state=work&resource=${encodeURIComponent(`${issuer}/mcp`)}`,
+    );
+    const requestId = new URL(start.headers.get("location") ?? "").searchParams.get("request");
+    const approved = await app.request("/oauth/consent", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: cookieFor(work.id) },
+      body: JSON.stringify({ request: requestId, teamIds: [fixture.home.id] }),
+    });
+    assert.equal(approved.status, 200);
+    const redirectTo = new URL(((await approved.json()) as { redirectTo: string }).redirectTo);
+    const issued = await token({
+      grant_type: "authorization_code",
+      code: redirectTo.searchParams.get("code") ?? "",
+      client_id: registered.client_id,
+      redirect_uri: redirectUri,
+      code_verifier: verifier,
+      resource: `${issuer}/mcp`,
+    });
+    assert.equal(issued.status, 200);
+    const access = issued.json as { access_token: string; refresh_token: string };
+
+    const listed = await rpc(access.access_token, "tools/call", {
+      name: "list_tasks",
+      arguments: { teamId: fixture.home.id, status: "open" },
+    });
+    const tasksOnList = toolJson(listed.json) as { tasks: { id: string }[] };
+    assert.equal(tasksOnList.tasks.some((row) => row.id === task.id), true);
+
+    const updated = await rpc(access.access_token, "tools/call", {
+      name: "update_task",
+      arguments: { id: task.id, title: "Work Life note updated" },
+    });
+    assert.equal((toolJson(updated.json) as { title: string }).title, "Work Life note updated");
+
+    for (const teamId of [fixture.personal.id, fixture.other.id]) {
+      const denied = await rpc(access.access_token, "tools/call", {
+        name: "list_tasks",
+        arguments: { teamId },
+      });
+      assert.equal((rpcResult(denied.json) as { isError?: boolean }).isError, true);
+      assert.match((rpcResult(denied.json) as { content?: { text: string }[] }).content?.[0]?.text ?? "", /403/);
+    }
+
+    const mint = await app.request(`/teams/${fixture.home.id}/tokens`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: cookieFor(work.id) },
+      body: JSON.stringify({ label: "nope" }),
+    });
+    assert.equal(mint.status, 403);
+    const invite = await app.request(`/teams/${fixture.home.id}/members`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: cookieFor(work.id) },
+      body: JSON.stringify({ email: "someone@example.com" }),
+    });
+    assert.equal(invite.status, 403);
+    const ownerMint = await app.request(`/teams/${fixture.home.id}/tokens`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: cookieFor(fixture.user.id) },
+      body: JSON.stringify({ label: "owner still can" }),
+    });
+    assert.equal(ownerMint.status, 201);
+
+    await db.delete(memberships).where(and(eq(memberships.teamId, fixture.home.id), eq(memberships.userId, work.id)));
+    const stale = await rpc(access.access_token, "tools/call", {
+      name: "update_task",
+      arguments: { id: task.id, title: "should not stick" },
+    });
+    assert.equal((rpcResult(stale.json) as { isError?: boolean }).isError, true);
+    assert.match((rpcResult(stale.json) as { content?: { text: string }[] }).content?.[0]?.text ?? "", /403/);
+
+    const refreshed = await token({
+      grant_type: "refresh_token",
+      refresh_token: access.refresh_token,
+      client_id: registered.client_id,
+      resource: `${issuer}/mcp`,
+    });
+    assert.equal(refreshed.status, 200);
+    const next = refreshed.json as { access_token: string };
+    const afterRefresh = await rpc(next.access_token, "tools/call", {
+      name: "list_tasks",
+      arguments: { teamId: fixture.home.id },
+    });
+    assert.equal((rpcResult(afterRefresh.json) as { isError?: boolean }).isError, true);
+    const widened = await rpc(next.access_token, "tools/call", {
+      name: "list_tasks",
+      arguments: { teamId: fixture.personal.id },
+    });
+    assert.equal((rpcResult(widened.json) as { isError?: boolean }).isError, true);
+    const stored = await db.select().from(tasks).where(eq(tasks.id, task.id));
+    assert.equal(stored[0]?.title, "Work Life note updated");
   });
 });
 
