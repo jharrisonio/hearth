@@ -2,8 +2,10 @@ import type { AreaSummary, AuthConfig, BotSummary, BotTokenSummary, ConnectorSum
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { useAuth } from "@/auth";
+import { ShareLink } from "@/components/ShareLink";
 import { Button } from "@/components/ui/button";
 import { ApiError, api } from "@/lib/api";
+import { pageLink, settingsPath } from "@/lib/page-link";
 import { cn } from "@/lib/cn";
 import { fieldClass, labelClass, pageTitleClass, sectionClass, subheadClass } from "@/lib/field";
 import { LIST_KEY } from "@/lib/list";
@@ -222,7 +224,16 @@ export function Settings() {
   return (
     <div className="h-full min-h-0 bg-black text-white">
       <main className="hearth-sheet mx-auto h-full w-full max-w-[560px] overflow-y-auto px-7 pb-16 pt-[calc(env(safe-area-inset-top)+3.5rem)]">
-        <h1 className={pageTitleClass}>Settings</h1>
+        <div className="mb-12 flex items-center justify-between gap-4">
+          <h1 className={cn(pageTitleClass, "mb-0")}>Settings</h1>
+          <ShareLink
+            link={pageLink(
+              settingsPath(team?.id ?? teamId ?? null),
+              team ? `Settings · ${team.name}` : "Settings",
+              window.location.origin,
+            )}
+          />
+        </div>
         {loading ? <p className="text-[10px] uppercase tracking-[0.4em] text-[#a8a8a8]">Loading</p> : null}
         {error ? <p className="mb-6 text-[13px] text-[#c9a35a]">{error}</p> : null}
         {notice ? <p className="mb-6 text-[13px] text-[#cfcfcf]">{notice}</p> : null}

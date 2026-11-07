@@ -1,5 +1,5 @@
 import type { Action, Task, TeamSummary } from "@hearth/shared";
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useLocation, useMatch, useNavigate } from "react-router";
 import { useAuth } from "@/auth";
 import { TabBar } from "@/components/TabBar";
@@ -10,6 +10,7 @@ import { ApiError, api } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { fieldClass, labelClass } from "@/lib/field";
 import { LIST_KEY } from "@/lib/list";
+import { teamFromSearch } from "@/lib/page-link";
 
 type Editor = { teamId: string; task: Task | null; defaultAction: Action };
 
@@ -38,7 +39,9 @@ export function Shell() {
   const navigate = useNavigate();
   const location = useLocation();
   const [teams, setTeams] = useState<TeamSummary[]>([]);
-  const [listId, setListId] = useState<string | null>(() => sessionStorage.getItem(LIST_KEY));
+  const [listId, setListId] = useState<string | null>(
+    () => teamFromSearch(window.location.search) ?? sessionStorage.getItem(LIST_KEY),
+  );
   const [teamsLoading, setTeamsLoading] = useState(true);
   const [teamsError, setTeamsError] = useState<string | null>(null);
   const [pickingList, setPickingList] = useState(false);
@@ -84,6 +87,15 @@ export function Shell() {
     sessionStorage.setItem(LIST_KEY, id);
     setListId(id);
   }, []);
+
+  const requestedTeam = teamFromSearch(location.search);
+  const appliedTeam = useRef<string | null>(null);
+  useEffect(() => {
+    if (!requestedTeam || appliedTeam.current === requestedTeam) return;
+    if (!teams.some((team) => team.id === requestedTeam)) return;
+    appliedTeam.current = requestedTeam;
+    chooseList(requestedTeam);
+  }, [requestedTeam, teams, chooseList]);
 
   const openTask = useCallback(
     (task: Task | null, defaultAction: Action = "do_now") => {
@@ -198,6 +210,13 @@ export function Shell() {
         onChoose={(id) => {
           chooseList(id);
           setPickingList(false);
+          const path = location.pathname;
+          const listPage = path === "/tasks" || path === "/archive" || path === "/projects" || path.startsWith("/projects/");
+          if (!listPage) return;
+          const params = new URLSearchParams(location.search);
+          if (params.get("team") === id) return;
+          params.set("team", id);
+          navigate(`${path}?${params.toString()}`, { replace: true });
         }}
         onCreate={() => {
           setPickingList(false);
