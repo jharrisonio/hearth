@@ -221,17 +221,13 @@ export async function assertActorCurrent(actor: Actor, teamId: string) {
     throw new HttpError(401, "unauthorized", "Invalid or revoked token.");
   }
   const [grant] = await db
-    .select({ revokedAt: oauthGrants.revokedAt })
+    .select({ revokedAt: oauthGrants.revokedAt, userId: oauthGrants.userId })
     .from(oauthGrants)
     .where(eq(oauthGrants.id, token.grantId))
     .limit(1);
   if (!grant || grant.revokedAt) throw new HttpError(401, "unauthorized", "Invalid or revoked token.");
-  const [link] = await db
-    .select({ teamId: oauthGrantTeams.teamId })
-    .from(oauthGrantTeams)
-    .where(and(eq(oauthGrantTeams.grantId, token.grantId), eq(oauthGrantTeams.teamId, teamId)))
-    .limit(1);
-  if (!link) throw new HttpError(403, "forbidden", "This token is not valid for that team.");
+  const teamsForGrant = await oauthGrantTeamIds(token.grantId, grant.userId);
+  if (!teamsForGrant.includes(teamId)) throw new HttpError(403, "forbidden", "This token is not valid for that team.");
 }
 
 async function oauthFromSecret(secret: string): Promise<Actor | null> {
@@ -246,14 +242,20 @@ async function oauthFromSecret(secret: string): Promise<Actor | null> {
   }
   const [grant] = await db.select().from(oauthGrants).where(eq(oauthGrants.id, token.grantId)).limit(1);
   if (!grant || grant.revokedAt) return null;
-  const links = await db
-    .select({ teamId: oauthGrantTeams.teamId })
-    .from(oauthGrantTeams)
-    .where(eq(oauthGrantTeams.grantId, grant.id));
   return {
     type: "bot",
     id: grant.id,
-    teamIds: links.map((link) => link.teamId),
+    teamIds: await oauthGrantTeamIds(grant.id, grant.userId),
     credential: { kind: "oauth", id: token.id },
   };
+}
+
+/** Lists on this grant that the person who authorised it still belongs to. */
+async function oauthGrantTeamIds(grantId: string, userId: string): Promise<string[]> {
+  const links = await db
+    .select({ teamId: oauthGrantTeams.teamId })
+    .from(oauthGrantTeams)
+    .innerJoin(memberships, and(eq(memberships.teamId, oauthGrantTeams.teamId), eq(memberships.userId, userId)))
+    .where(eq(oauthGrantTeams.grantId, grantId));
+  return links.map((link) => link.teamId);
 }

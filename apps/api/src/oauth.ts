@@ -310,7 +310,7 @@ export async function approveAuthorization(input: {
   const client = await findClient(request.clientId);
   if (!client) throw new HttpError(400, "invalid_request", "That client is no longer registered.");
   const teamIds = [...new Set(input.teamIds)];
-  await assertOwnerOfTeams(input.userId, teamIds);
+  await assertMemberOfTeams(input.userId, teamIds);
   const seen = new Map<string, string>();
   for (const bot of input.bots) {
     seen.set(bot.agentId, bot.name);
@@ -524,14 +524,15 @@ async function loadOpenRequest(requestId: string) {
   return row;
 }
 
-async function assertOwnerOfTeams(userId: string, teamIds: string[]) {
+/** A connector may cover any list the person belongs to. Owner is not required. */
+async function assertMemberOfTeams(userId: string, teamIds: string[]) {
   const rows = await db
-    .select({ teamId: memberships.teamId, role: memberships.role })
+    .select({ teamId: memberships.teamId })
     .from(memberships)
     .where(and(eq(memberships.userId, userId), inArray(memberships.teamId, teamIds)));
-  const owned = new Set(rows.filter((row) => row.role === "owner").map((row) => row.teamId));
-  if (teamIds.some((teamId) => !owned.has(teamId))) {
-    throw new HttpError(403, "forbidden", "Only an owner can connect that list.");
+  const joined = new Set(rows.map((row) => row.teamId));
+  if (teamIds.some((teamId) => !joined.has(teamId))) {
+    throw new HttpError(403, "forbidden", "You can only connect a list you belong to.");
   }
 }
 

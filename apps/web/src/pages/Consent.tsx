@@ -28,7 +28,7 @@ export function Consent() {
         if (cancelled) return;
         setPreview(nextPreview);
         setTeams(nextTeams.teams);
-        setSelected(nextTeams.teams.filter((team) => team.role === "owner").map((team) => team.id));
+        setSelected([]);
         setRoster(nextPreview.agents.map((agent) => agent.agentId));
       })
       .catch((err: unknown) => {
@@ -80,7 +80,7 @@ export function Consent() {
       return;
     }
     if (!selected || selected.length === 0) {
-      setError("Choose at least one list you own.");
+      setError("Choose at least one list.");
       return;
     }
     setPending("approve");
@@ -106,8 +106,7 @@ export function Consent() {
     }
   }
 
-  const owners = teams?.filter((team) => team.role === "owner") ?? [];
-  const others = teams?.filter((team) => team.role !== "owner") ?? [];
+  const lists = teams ?? [];
 
   return (
     <div className="min-h-dvh bg-black text-white">
@@ -129,8 +128,12 @@ export function Consent() {
             <p className="mt-3 break-all text-[12px] font-light text-[#a8a8a8]">{preview.redirectUri}</p>
 
             <h2 className={cn(labelClass, "mt-10")}>Lists</h2>
+            <p className={hintClass}>
+              Choose lists you belong to. This connection can read and update tasks there. Inviting people and minting
+              tokens stays with an owner.
+            </p>
             <ul>
-              {owners.map((team) => (
+              {lists.map((team) => (
                 <li key={team.id} className="border-b border-[#1c1c1c]">
                   <label className="flex items-center justify-between gap-4 py-3.5 text-[14px] font-light">
                     <span>
@@ -145,16 +148,7 @@ export function Consent() {
                   </label>
                 </li>
               ))}
-              {owners.length === 0 ? <li className="py-3.5 text-[13px] text-[#a8a8a8]">You do not own a list yet.</li> : null}
-              {others.map((team) => (
-                <li
-                  key={team.id}
-                  className="flex items-baseline justify-between gap-4 border-b border-[#1c1c1c] py-3.5 text-[14px] font-light text-[#a8a8a8]"
-                >
-                  <span>{team.name}</span>
-                  <span className="text-[12px]">Ask an owner</span>
-                </li>
-              ))}
+              {lists.length === 0 ? <li className="py-3.5 text-[13px] text-[#a8a8a8]">You are not on a list yet.</li> : null}
             </ul>
 
             <h2 className={cn(labelClass, "mt-10")}>Bot owners</h2>
