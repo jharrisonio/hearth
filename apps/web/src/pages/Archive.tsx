@@ -5,6 +5,7 @@ import { useAuth } from "@/auth";
 import { Chips } from "@/components/Chips";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { ApiError, api } from "@/lib/api";
+import { archivePath, pageLink } from "@/lib/page-link";
 import { useShell } from "@/shell";
 
 type ArchiveFilter = "all" | "done" | "cancelled";
@@ -86,10 +87,15 @@ export function Archive() {
   }
 
   const notice = error ?? teamsError;
+  const share = pageLink(
+    archivePath(current?.id ?? null, filter),
+    filter === "all" ? `Archive · ${current?.name ?? "Archive"}` : `Archive · ${current?.name ?? "Archive"} · ${filter === "done" ? "Done" : "Cancelled"}`,
+    window.location.origin,
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <ScreenHeader listName={current?.name ?? ""} onPickList={openListPicker} />
+      <ScreenHeader listName={current?.name ?? ""} onPickList={openListPicker} link={share} />
       <div className="shrink-0 px-7 pb-2">
         <Chips label="Archive" value={filter} options={filters} onChange={setFilter} />
       </div>

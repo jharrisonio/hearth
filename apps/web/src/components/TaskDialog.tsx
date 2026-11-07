@@ -27,7 +27,9 @@ import { PencilIcon } from "@/components/Icons";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { actionLabel, axesFor } from "@/lib/action";
+import { ShareLink } from "@/components/ShareLink";
 import { ApiError, api } from "@/lib/api";
+import { pageLink, taskKeyPath } from "@/lib/page-link";
 import { cn } from "@/lib/cn";
 import { fieldClass, hintClass, labelClass } from "@/lib/field";
 import { fromLocalInput, ownerKey, parseOwnerKey, toLocalInput } from "@/lib/format";
@@ -143,7 +145,6 @@ function TaskForm({
   const [deleting, setDeleting] = useState(false);
   const [panel, setPanel] = useState<PropertyPanel | null>(null);
   const [snoozedUntil, setSnoozedUntil] = useState<string | null>(task?.snoozedUntil ?? null);
-  const [copied, setCopied] = useState(false);
   const [moveTarget, setMoveTarget] = useState<string | null>(null);
   const [moving, setMoving] = useState(false);
   const otherLists = teams.filter((item) => item.id !== (task?.teamId ?? teamId));
@@ -535,18 +536,6 @@ function TaskForm({
     }
   }
 
-  function copyTaskLink() {
-    if (!task?.key) return;
-    const url = `https://hearth.jharrison.io/t/${task.key}`;
-    void navigator.clipboard.writeText(url).then(
-      () => {
-        setCopied(true);
-        window.setTimeout(() => setCopied(false), 1200);
-      },
-      () => setError("Could not copy the link."),
-    );
-  }
-
   const calendarLink = action === "schedule" ? calendarHref(calendarEventId) : null;
   const showCheckIn =
     status === "open" && action === "schedule" && needsCheckIn({ status: "open", action, dueAt: fromLocalInput(dueAt) });
@@ -559,14 +548,7 @@ function TaskForm({
           <div className="flex min-w-0 items-center">
             <DialogTitle className={task ? "sr-only" : "mb-0"}>{task ? title || "Task" : "New task"}</DialogTitle>
             {task?.key ? (
-              <button
-                type="button"
-                onClick={copyTaskLink}
-                aria-label={copied ? "Copied" : `Copy link to ${task.key}`}
-                className="truncate text-left text-[11px] font-normal tracking-[0.16em] text-[#a8a8a8] hover:text-white"
-              >
-                {copied ? "Copied" : task.key}
-              </button>
+              <ShareLink link={pageLink(taskKeyPath(task.key), title || task.key, window.location.origin)} label={task.key} />
             ) : null}
           </div>
           {task && saveLabel ? (

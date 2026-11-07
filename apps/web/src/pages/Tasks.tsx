@@ -1,6 +1,6 @@
 import { actions, isBackFromSnooze, isSnoozed, SNOOZE_TIME_ZONE, type Action, type Task } from "@hearth/shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router";
+import { useMatch, useNavigate, useSearchParams } from "react-router";
 import { useAuth } from "@/auth";
 import { Chips } from "@/components/Chips";
 import { iconButtonClass } from "@/components/Icons";
@@ -8,6 +8,7 @@ import { ScreenHeader } from "@/components/ScreenHeader";
 import { TaskRow } from "@/components/TaskRow";
 import { actionLabel } from "@/lib/action";
 import { ApiError, api } from "@/lib/api";
+import { pageLink, taskKeyPath, tasksPath } from "@/lib/page-link";
 import { useShell } from "@/shell";
 
 const actionOptions = actions.map((action) => ({ value: action, label: actionLabel[action] }));
@@ -24,6 +25,14 @@ export function Tasks() {
   const request = useRef(0);
   const requested = params.get("action");
   const filter: Action = (actions as readonly string[]).includes(requested ?? "") ? (requested as Action) : "do_now";
+  const taskRoute = useMatch("/t/:key");
+  const share = taskRoute?.params.key
+    ? pageLink(taskKeyPath(taskRoute.params.key), `Task ${taskRoute.params.key}`, window.location.origin)
+    : pageLink(
+        tasksPath(current?.id ?? null, filter),
+        filter === "do_now" ? `Tasks · ${current?.name ?? "Tasks"}` : `Tasks · ${current?.name ?? "Tasks"} · ${actionLabel[filter]}`,
+        window.location.origin,
+      );
 
   const reload = useCallback(async () => {
     const id = ++request.current;
@@ -85,6 +94,7 @@ export function Tasks() {
       <ScreenHeader
         listName={current?.name ?? ""}
         onPickList={openListPicker}
+        link={share}
         trailing={
           <button
             type="button"
